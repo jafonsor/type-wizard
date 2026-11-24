@@ -22,10 +22,13 @@ testWords :: Words
 testWords = mkWords (combos 3 "abcd" <> take 64 (combos 4 "efgh") <> take 8 (combos 5 "ijklmnop"))
 
 -- | Quick rules: 10 Enemies per Tier, intervals 2 s down to 1 s, Tiers 3 to 4.
+-- Lives and Grace are generous (100 Lives, 10 s) so a long scripted Round with
+-- parked Enemies does not end before the test is done; the Hit tests set their own.
 tinyCfg :: Settings
 tinyCfg = defaultSettings
   { enemiesPerTier = 10, firstTier = 3, lastTier = 4
-  , intervalStart = 2, intervalEnd = 1, enemySpeed = 1, wordLookahead = 0 }
+  , intervalStart = 2, intervalEnd = 1, enemySpeed = 1, wordLookahead = 0
+  , startingLives = 100, gracePeriod = 10 }
 
 -- | Start with a seed, then Ticks every dt seconds from t = 100 for n steps
 -- (the first Tick has dt 0).

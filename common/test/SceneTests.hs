@@ -195,7 +195,7 @@ sceneTests = TestLabel "scene" $ TestList
   , "the HUD: top-right \"Points N\" and \"Total N\" lines, bottom-centre \"Streak N\"" ~: do
       let st = (scoredRound tinyCfg emptySave { Sv.totalPoints = 321, Sv.streak = 12 } []) { roundPoints = 8 }
           sc = sceneOf defaultSettings st
-          hud = [ (p, a, str) | n <- sc.sceneOverlay, Just (p, a, _, str, _) <- [textOf n] ]
+          hud = [ (p, a, str) | n <- sc.sceneOverlay, Just (p, a, _, str, _) <- [textOf n], str /= "Esc: menu" ]
       map (\(_, _, str) -> str) hud @?= ["Points 8", "Total 321", "Streak 12"]
       case hud of
         [(V2 x1 y1, a1, _), (V2 x2 y2, a2, _), (V2 x3 y3, a3, _)] -> do
@@ -205,9 +205,41 @@ sceneTests = TestLabel "scene" $ TestList
           assertBool "inside the view" (x1 < 10 * 16 / 9 && y1 < 10 && y3 > -10)
         _ -> assertFailure "three HUD lines expected"
 
-  , "the HUD text uses the letter default colour" ~:
+  , "the HUD text uses the letter default colour (the Esc hint is the muted one)" ~:
       sequence_ [ cs @?= replicate (length str) (hexColour defaultSettings.letterDefaultColour)
-                | n <- (sceneOf defaultSettings (scoredRound tinyCfg emptySave [])).sceneOverlay, Just (_, _, _, str, cs) <- [textOf n] ]
+                | n <- (sceneOf defaultSettings (scoredRound tinyCfg emptySave [])).sceneOverlay, Just (_, _, _, str, cs) <- [textOf n], str /= "Esc: menu" ]
+
+  , "Lives: one 0.4 square per starting Life at the top-left, all white at full Lives" ~: do
+      let st = scoredRound tinyCfg { startingLives = 3 } emptySave []
+      map fst (livesRow st) @?= [V2 (-halfW + 0.6 + 0.2) (10 - 0.6 - 0.2), V2 (-halfW + 0.6 + 0.2 + 0.6) (10 - 0.6 - 0.2), V2 (-halfW + 0.6 + 0.2 + 1.2) (10 - 0.6 - 0.2)]
+      livesCounts st @?= (3, 0)
+      assertBool "the sizes are 0.4" (all ((== V2 0.4 0.4) . sizeOf) (livesSquares st))
+
+  , "Lives: lost Lives are dim #2a3140 squares, the kept ones stay white and in place" ~: do
+      let st = (scoredRound tinyCfg { startingLives = 3 } emptySave []) { lives = 1 }
+      livesCounts st @?= (1, 2)
+      map snd (livesRow st) @?= [Colour 1 1 1 1, hexColour "#2a3140", hexColour "#2a3140"]
+      map fst (livesRow st) @?= map fst (livesRow (scoredRound tinyCfg { startingLives = 3 } emptySave []))
+      livesCounts ((scoredRound tinyCfg { startingLives = 3 } emptySave []) { lives = 0 }) @?= (0, 3)
+
+  , "Lives: the row follows the Round's startingLives (5 squares, 1 and 10 too)" ~: do
+      livesCounts (scoredRound tinyCfg { startingLives = 5 } emptySave []) @?= (5, 0)
+      livesCounts ((scoredRound tinyCfg { startingLives = 5 } emptySave []) { lives = 4 }) @?= (4, 1)
+      livesCounts (scoredRound tinyCfg { startingLives = 1 } emptySave []) @?= (1, 0)
+      livesCounts (scoredRound tinyCfg { startingLives = 10 } emptySave []) @?= (10, 0)
+
+  , "the Esc hint: small \"Esc: menu\" text at the bottom-left, left-anchored, in view, smaller than the HUD lines" ~:
+      case [ (p, a, h) | n <- (sceneOf defaultSettings (scoredRound tinyCfg emptySave [])).sceneOverlay, Just (p, a, h, "Esc: menu", _) <- [textOf n] ] of
+        [(V2 x y, a, h)] -> do
+          a @?= AnchorLeft
+          assertBool "bottom-left, inside the view" (x < 0 && x > -halfW && y < 0 && y > -10)
+          assertBool "smaller than the HUD" (h < 0.8)
+        other -> assertFailure ("one hint expected: " <> show other)
+
+  , "the Lives and the hint draw in the overlay, not the world (no Camera pan moves them)" ~: do
+      let sc = sceneOf defaultSettings (scoredRound tinyCfg { startingLives = 3 } emptySave [])
+      length [ () | Square {} <- sc.sceneOverlay ] @?= 3
+      assertBool "no Life squares in the world beyond Player, background and meter" (length [ () | Square {} <- sc.sceneWorld ] == 2)
 
   , "shotColour: 11 stops from the ramp start at 0 to the ramp end at 100 and beyond" ~: do
       let c = shotColour defaultSettings
@@ -259,6 +291,26 @@ focusColours :: GameState -> Int -> [Colour]
 focusColours st i = case drop i (enemyPairs (sceneOf defaultSettings st)) of
   (_, t) : _ | Just (_, _, _, _, cs) <- textOf t -> cs
   _ -> []
+
+-- Lives display ---------------------------------------------------------------
+
+halfW :: Float
+halfW = 10 * 16 / 9
+
+livesSquares :: GameState -> [Node]
+livesSquares st = [ n | n@(Square {}) <- (sceneOf defaultSettings st).sceneOverlay ]
+
+sizeOf :: Node -> V2
+sizeOf n = maybe (V2 0 0) (\(_, sz, _) -> sz) (squareAt n)
+
+-- | The Lives squares' centres and colours, in row order.
+livesRow :: GameState -> [(V2, Colour)]
+livesRow st = [ (p, c) | n <- livesSquares st, Just (p, _, c) <- [squareAt n] ]
+
+-- | (white squares, dim squares)
+livesCounts :: GameState -> (Int, Int)
+livesCounts st = (length (filter ((== Colour 1 1 1 1) . snd) row), length (filter ((== hexColour "#2a3140") . snd) row))
+  where row = livesRow st
 
 -- Scoring display -------------------------------------------------------------
 

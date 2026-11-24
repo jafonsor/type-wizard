@@ -41,12 +41,25 @@ stateSummary st = object
   , "groupCompletedAt" .= st.groupCompletedAt
   , "accuracy" .= accuracy st
   , "wpm" .= wpm st
+  , "lives" .= st.lives
+  , "graceActive" .= graceActive st
+  , "graceRemaining" .= graceRemaining st
+  , "paused" .= st.paused
+  , "windowFocused" .= st.windowFocused
+  , "roundTime" .= st.roundTime
+  , "roundResult" .= fmap resultSummary st.roundResult
   , "enemies" .=
       [ object
           [ "id" .= e.enemyId, "word" .= e.enemyWord, "tier" .= e.enemyTier
           , "x" .= e.enemyPos.vx, "y" .= e.enemyPos.vy, "distance" .= distanceToPlayer st e ]
       | e <- st.enemies ]
   ]
+
+resultSummary :: RoundResult -> Value
+resultSummary r = object
+  [ "points" .= r.resPoints, "totalPoints" .= r.resTotalPoints, "wpm" .= r.resWpm
+  , "accuracy" .= r.resAccuracy, "kills" .= r.resKills
+  , "longestStreak" .= r.resLongestStreak, "streak" .= r.resStreak ]
 
 -- | The summary as JSON text.
 stateSummaryText :: GameState -> Text

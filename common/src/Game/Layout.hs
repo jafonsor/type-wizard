@@ -17,6 +17,9 @@ module Game.Layout
   , bonusLabelHeight
   , hudMargin
   , hudTextHeight
+  , hintTextHeight
+  , lifeSize
+  , lifeGap
   ) where
 
 -- | The Player is a square of this side.
@@ -69,3 +72,12 @@ bonusLabelHeight = 0.8
 hudMargin, hudTextHeight :: Double
 hudMargin = 0.6
 hudTextHeight = 0.8
+
+-- | The "Esc: menu" hint's text height (smaller than the HUD lines).
+hintTextHeight :: Double
+hintTextHeight = 0.6
+
+-- | A Life square's side (spec section 9) and the gap between two.
+lifeSize, lifeGap :: Double
+lifeSize = 0.4
+lifeGap = 0.2

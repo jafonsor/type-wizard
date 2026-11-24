@@ -15,7 +15,7 @@
 -- counts only this Round's consecutive Kills (from 0 at 'Start', whatever
 -- Streak was carried in). 'Start' carries the saved progress in (its Streak
 -- and Total Points; the saved Bonus is ignored and re-derived). Points are
--- /not/ banked into 'totalPoints' here: that is the Round-end slice's job.
+-- banked into 'totalPoints' only when the Round ends (see /Hits and Round end/).
 --
 -- /Typing./ Input is handled only while the Phase is Running. Only a-z
 -- letters are Keystrokes ('Key' with anything else is ignored). The Focus is
@@ -27,6 +27,30 @@
 -- characters of 'wpm' are the correct Keystrokes (every correct Keystroke
 -- types one character of a Word). 'roundTime' is the sum of the clamped Tick
 -- steps, so a blur never counts as typing time.
+--
+-- /Hits and Round end./ After the Enemies move in a Tick, an Enemy touching
+-- the Player (distance within 'contactDistance', plus rounding slack) with no
+-- Grace Period active is a Hit: one Life lost, and a Grace Period of
+-- @gracePeriod@ seconds starts. Several touching Enemies are still one Hit per
+-- moment. 'graceStart' is the 'roundTime' at which the Grace began (Grace is
+-- active while @roundTime < graceStart + gracePeriod@; Round time is the
+-- clamped Tick sum, so it never counts a blur). When Grace ends and an Enemy
+-- still touches, the next Hit comes at once and its Grace starts at the
+-- scheduled end of the last one (not at the Tick that noticed it), so a parked
+-- Enemy costs a Life every Grace Period without drift. A Hit never touches the
+-- Streak and an Enemy is not removed by touching. At 0 Lives 'endRound' makes
+-- the Phase 'Over': Focus and Lock drop, the Enemies are discarded with no
+-- Points, 'totalPoints' becomes the banked value (carried-in plus Round
+-- Points) and 'roundResult' holds the 'RoundResult'. Over ignores every
+-- input but 'Start' (and 'Aspect'), so the counters, 'roundTime' and so WPM
+-- and Accuracy are final. 'roundEnded' derives the one-shot result from a
+-- Running to Over transition; 'bankRound' adds the Round Points to a 'Save'.
+--
+-- /Blur./ 'Blur' sets 'paused' (Running only): Ticks then only move
+-- 'lastTime' forward (dt 0, no spawn, no movement, no Grace progress). 'Focus'
+-- marks the window focused again; the next 'Key', 'Tab' or 'Click' while paused
+-- and focused resumes and is swallowed (it is not a Keystroke). Anything
+-- before 'Focus' is ignored. The scene builder's own clock is not paused.
 --
 -- /Spawn timing./ The wait before Enemy @k@ of a Tier (counting from 1) is
 -- measured from the previous spawn (from 'Start' for the first Enemy of the
@@ -46,6 +70,7 @@ module Game.State
   , Focus (..)
   , focusInfo
   , Input (..)
+  , RoundResult (..)
   , Seed
   , initialState
   , step
@@ -63,6 +88,11 @@ module Game.State
   , streakBonus
   , meterFill
   , progressSave
+    -- * Hits and Round end
+  , graceActive
+  , graceRemaining
+  , roundEnded
+  , bankRound
   ) where
 
 import Control.Applicative ((<|>))
@@ -145,13 +175,31 @@ data GameState = GameState
   , roundPoints :: Int -- ^ Points earned this Round
   , runKills :: Int -- ^ consecutive Kills this Round (0 at 'Start', cleared by a Typo)
   , longestStreak :: Int -- ^ the longest 'runKills' this Round
-  , totalPoints :: Int -- ^ Total Points as carried in at 'Start' (banking is the Round-end slice's)
+  , totalPoints :: Int -- ^ Total Points as carried in at 'Start' (plus the Round Points once the Round is Over)
   , groupCompletedAt :: Maybe Double
     -- ^ 'roundTime' of the latest Kill that completed a group (the meter then
     -- reads empty again: full-then-clears). A Typo clears it. The animation
     -- reads it; the state itself only records it.
   , roundTime :: Double -- ^ seconds of Round time (sum of the clamped Tick steps)
   , firstKeyAt :: Maybe Double -- ^ 'roundTime' at the first Keystroke
+  , lives :: Int -- ^ Lives left; the Round's @startingLives@ at 'Start'
+  , graceStart :: Maybe Double -- ^ 'roundTime' at which the running Grace Period began
+  , paused :: Bool -- ^ the window lost focus; the Round logic is frozen
+  , windowFocused :: Bool -- ^ the window has focus (after a 'Blur', until 'Focus')
+  , roundResult :: Maybe RoundResult -- ^ set when the Round ends ('Over')
+  }
+  deriving stock (Eq, Show)
+
+-- | What a finished Round reports (the Round Summary's rows and the payload
+-- of @RoundEnded@). 'resTotalPoints' is the Total Points after banking.
+data RoundResult = RoundResult
+  { resPoints :: Int
+  , resTotalPoints :: Int
+  , resWpm :: Double
+  , resAccuracy :: Double
+  , resKills :: Int
+  , resLongestStreak :: Int
+  , resStreak :: Int
   }
   deriving stock (Eq, Show)
 
@@ -167,6 +215,9 @@ data Input
     -- ^ the view's width over height; the spawn ring depends on it. It is an
     -- input (not carried by 'Tick') so 'Tick' keeps the spec's shape, and it
     -- survives 'Start'. Until one arrives the state assumes 16:9.
+  | Blur -- ^ the window lost focus: freeze the Round
+  | Focus -- ^ the window has focus again (it does not resume by itself)
+  | Click -- ^ a pointer press; resumes a paused Round that has its focus back
   deriving stock (Eq, Show)
 
 -- | Before the first 'Start'.
@@ -197,14 +248,25 @@ initialState = GameState
   , groupCompletedAt = Nothing
   , roundTime = 0
   , firstKeyAt = Nothing
+  , lives = defaultSettings.startingLives
+  , graceStart = Nothing
+  , paused = False
+  , windowFocused = True
+  , roundResult = Nothing
   }
 
 step :: Settings -> Words -> Input -> GameState -> GameState
 step settings ws input st = case input of
   Start seed carried -> startRound settings seed carried st
+  Tick now | st.phase == Running, st.paused -> st { lastTime = Just now }
   Tick now | st.phase == Running -> tick ws now st
+  Key _ | st.phase == Running, st.paused -> wake st
+  Tab | st.phase == Running, st.paused -> wake st
+  Click | st.phase == Running, st.paused -> wake st
   Key c | st.phase == Running, c >= 'a' && c <= 'z' -> keystroke c st
   Tab | st.phase == Running -> st { focus = NoFocus }
+  Blur | st.phase == Running -> st { paused = True, windowFocused = False }
+  Focus -> st { windowFocused = True }
   Aspect a | a > 0 && not (isInfinite a) -> st { viewAspect = a }
   _ -> st
 
@@ -217,12 +279,20 @@ startRound settings seed carried st = initialState
   , totalPoints = max 0 carried.totalPoints
   , roundSettings = settings
   , currentTier = settings.firstTier
+  , lives = max 1 settings.startingLives
   , rng = Rng (mkSMGen seed)
   , viewAspect = st.viewAspect
   }
 
+-- | A 'Key', 'Tab' or 'Click' while paused: resumes if the window has its focus
+-- back; either way the input is swallowed (never a Keystroke).
+wake :: GameState -> GameState
+wake st = if st.windowFocused then st { paused = False } else st
+
 tick :: Words -> Double -> GameState -> GameState
-tick ws now st = spawnDue ws st'
+tick ws now st = case resolveHit st' of
+  hit | hit.phase == Running -> spawnDue ws hit
+      | otherwise -> hit
   where
     cfg = st.roundSettings
     dt = case st.lastTime of
@@ -234,6 +304,78 @@ tick ws now st = spawnDue ws st'
       , sinceSpawn = st.sinceSpawn + dt
       , enemies = map (advance cfg dt st.playerPos) st.enemies
       }
+
+-- Hits and Round end ----------------------------------------------------------
+
+-- | Is an Enemy touching the Player? (Parked Enemies sit at 'contactDistance'
+-- up to rounding.)
+touching :: GameState -> Enemy -> Bool
+touching st e = distanceToPlayer st e <= contactDistance + 1e-6
+
+-- | The Grace Period is running.
+graceActive :: GameState -> Bool
+graceActive st = case st.graceStart of
+  Just t0 -> st.roundTime < t0 + st.roundSettings.gracePeriod
+  Nothing -> False
+
+-- | Seconds of Grace left, 'Nothing' when none is running.
+graceRemaining :: GameState -> Maybe Double
+graceRemaining st = case st.graceStart of
+  Just t0 | graceActive st -> Just (t0 + st.roundSettings.gracePeriod - st.roundTime)
+  _ -> Nothing
+
+-- | The Hit rule, once per Tick after movement: an ended Grace is cleared,
+-- then, with no Grace running, any touching Enemy is one Hit.
+resolveHit :: GameState -> GameState
+resolveHit st = case st.graceStart of
+  Just t0
+    | graceActive st -> st
+    | otherwise -> hitIfTouching (t0 + st.roundSettings.gracePeriod) st { graceStart = Nothing }
+  Nothing -> hitIfTouching st.roundTime st
+
+-- | One Life lost (however many Enemies touch) and a Grace Period starting at
+-- the given Round time; the last Life ends the Round.
+hitIfTouching :: Double -> GameState -> GameState
+hitIfTouching startAt st
+  | not (any (touching st) st.enemies) = st
+  | st.lives <= 1 = endRound st { lives = 0 }
+  | otherwise = st { lives = st.lives - 1, graceStart = Just startAt }
+
+-- | Lives are 0: Over. Focus and Lock drop, the Enemies are discarded with no
+-- Points, the Round Points are banked into 'totalPoints' and the result is kept.
+endRound :: GameState -> GameState
+endRound st = st
+  { phase = Over
+  , focus = NoFocus
+  , enemies = []
+  , graceStart = Nothing
+  , paused = False
+  , totalPoints = banked
+  , roundResult = Just RoundResult
+      { resPoints = st.roundPoints
+      , resTotalPoints = banked
+      , resWpm = wpm st
+      , resAccuracy = accuracy st
+      , resKills = st.kills
+      , resLongestStreak = st.longestStreak
+      , resStreak = st.streak
+      }
+  }
+  where
+    banked = st.totalPoints + st.roundPoints
+
+-- | The 'RoundResult' of a Running to Over transition (old state, new state)
+-- and nothing for any other pair, so a state re-emitted while Over cannot end
+-- the Round (or bank) twice.
+roundEnded :: GameState -> GameState -> Maybe RoundResult
+roundEnded old new
+  | old.phase == Running, new.phase == Over = new.roundResult
+  | otherwise = Nothing
+
+-- | Banking: the Round Points join the saved Total Points. The Streak and
+-- Bonus are already saved per Kill or Typo.
+bankRound :: RoundResult -> Save -> Save
+bankRound r sv = sv { Save.totalPoints = sv.totalPoints + r.resPoints }
 
 -- | Moves an Enemy toward the Player by @enemySpeed * dt@, stopping at
 -- 'contactDistance' (an Enemy at or inside it stays put).
@@ -435,8 +577,8 @@ correctChars :: GameState -> Int
 correctChars = (.correctKeys)
 
 -- | Words per minute: (correct characters / 5) over the minutes from the
--- first Keystroke to now (the last Tick; the Round-end slice freezes it at
--- Round end). 0 before there is any time to divide by.
+-- first Keystroke to now (the last Tick; Round end freezes it, as no Tick
+-- advances an Over state). 0 before there is any time to divide by.
 wpm :: GameState -> Double
 wpm st = case st.firstKeyAt of
   Just t0 | st.roundTime > t0 -> (fromIntegral (correctChars st) / 5) / ((st.roundTime - t0) / 60)

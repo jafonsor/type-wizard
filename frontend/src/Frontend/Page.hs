@@ -16,10 +16,11 @@ import Language.Javascript.JSaddle (liftJSM)
 import Reflex.Dom.Core
 import Text.Read (readMaybe)
 
-import Frontend.Game (gameCanvas)
+import Frontend.Game (GameOut (..), gameCanvas)
 import Frontend.Storage (loadSave, loadSettings, storeSave, storeSettings)
 import Frontend.Words (allWords, gameWords)
 import Game.Save (Save (..), emptySave)
+import Game.State (bankRound)
 import Game.Settings qualified as S
 
 data Page = Start | Game | Settings
@@ -72,8 +73,12 @@ pageWidget settings save = \case
     pure $ pageOnly $ leftmost [Game <$ play, Settings <$ settingsB]
   Game -> section "game" "Game" do
     menu <- button "Menu"
-    progress <- gameCanvas gameWords settings save
-    pure (pageOnly (Start <$ menu)) { saveEdit = progress }
+    out <- gameCanvas gameWords settings save
+    -- RoundEnded: the root banks the Round Points once (the Over transition
+    -- fires once per Round) and the save is stored by the persistence below.
+    -- Menu, Escape and "Back to start" leave; leaving mid-Round banks nothing.
+    pure (pageOnly (Start <$ leftmost [menu, goLeave out]))
+      { saveEdit = mergeWith (.) [goSave out, bankRound <$> goRoundEnded out] }
   Settings -> section "settings" "Settings" do
     back <- button "Back"
     groupEdits <- traverse (settingsGroup settings) S.groups

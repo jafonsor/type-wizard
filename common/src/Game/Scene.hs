@@ -14,8 +14,11 @@
 --
 -- /HUD./ The overlay (screen-fixed, in world-height units): top-right
 -- "Points N" (this Round) and "Total N" (Total Points) as two lines,
--- bottom-centre "Streak N". Top-left (Lives) and bottom-left (the Esc hint)
--- are left to the Round-flow slice.
+-- bottom-centre "Streak N". Top-left is the Lives row: one 0.4 square per
+-- starting Life, white while kept and dim (the meter track's grey) once lost.
+-- Bottom-left is the small "Esc: menu" hint. (The DOM Menu control is at the
+-- top-centre, so nothing overlaps the Lives.) The Hit feedback animations
+-- belong to a later slice.
 module Game.Scene
   ( buildScene
   , shotColour
@@ -68,17 +71,49 @@ trackColour = hexColour "#2a3140"
 -- | The HUD text: top-right Points and Total (right-anchored lines), bottom-centre Streak.
 hudNodes :: Settings -> Frame -> GameState -> [Node]
 hudNodes cfg frame st =
+  livesNodes cfg frame st <>
   [ line AnchorRight (halfW - m) (halfH - m - h / 2) ("Points " <> show st.roundPoints)
   , line AnchorRight (halfW - m) (halfH - m - h * 1.75) ("Total " <> show st.totalPoints)
   , line AnchorCentre 0 (negate halfH + m + h / 2) ("Streak " <> show st.streak)
+  , Text (Transform (V2 (negate halfW + m) (negate halfH + m + hh / 2)) 0 (V2 1 1)) AnchorLeft hh
+      [ (ch, hintColour) | ch <- escHint ]
   ]
   where
     halfH = realToFrac cfg.worldHeight / 2
     halfW = halfH * frame.viewport.aspect
     m = realToFrac hudMargin
     h = realToFrac hudTextHeight
+    hh = realToFrac hintTextHeight
     line anchor x y str =
       Text (Transform (V2 x y) 0 (V2 1 1)) anchor h [ (ch, hexColour cfg.letterDefaultColour) | ch <- str ]
+
+-- | The text of the bottom-left hint.
+escHint :: String
+escHint = "Esc: menu"
+
+-- | The hint's colour: a muted grey, so it never competes with the HUD.
+hintColour :: Colour
+hintColour = hexColour "#7d8590"
+
+-- | The Lives row, top-left: one square per Life of the Round's @startingLives@
+-- (a hand-made state with more Lives than that shows them all), the first
+-- 'lives' white and the rest dim.
+livesNodes :: Settings -> Frame -> GameState -> [Node]
+livesNodes cfg frame st =
+  [ Square (at (V2 (x0 + fromIntegral i * (sz + gap)) y) sz sz) (if i < st.lives then lifeColour else trackColour)
+  | i <- [0 .. total - 1] ]
+  where
+    total = max st.lives (max 1 st.roundSettings.startingLives) :: Int
+    halfH = realToFrac cfg.worldHeight / 2
+    halfW = halfH * frame.viewport.aspect
+    sz = realToFrac lifeSize
+    gap = realToFrac lifeGap
+    x0 = negate halfW + realToFrac hudMargin + sz / 2
+    y = halfH - realToFrac hudMargin - sz / 2
+
+-- | A kept Life: white.
+lifeColour :: Colour
+lifeColour = Colour 1 1 1 1
 
 -- | The Shot colour for a Streak (spec section 9): the ramp has 11 stops, one
 -- per completed group of the Streak, from the settings' start colour at 0 to
