@@ -1,0 +1,36 @@
+-- | A JSON summary of the state for the browser check
+-- (@window.TypeWizardGame.state()@, dev only: it is written only when the
+-- page URL has @?hook@). Not used by the game.
+module Game.Debug
+  ( stateSummary
+  , stateSummaryText
+  ) where
+
+import Data.Aeson (Value, encode, object, (.=))
+import Data.Aeson.Key qualified as Key
+import Data.ByteString.Lazy qualified as LBS
+import Data.IntMap.Strict qualified as IntMap
+import Data.Text (Text)
+import Data.Text.Encoding (decodeUtf8)
+
+import Game.State
+
+stateSummary :: GameState -> Value
+stateSummary st = object
+  [ "phase" .= show st.phase
+  , "tier" .= st.currentTier
+  , "spawned" .= object [ Key.fromString (show t) .= n | (t, n) <- IntMap.toList st.spawnCounts ]
+  , "totalSpawned" .= totalSpawned st
+  , "enemyCount" .= length st.enemies
+  , "aspect" .= st.viewAspect
+  , "player" .= object ["x" .= st.playerPos.vx, "y" .= st.playerPos.vy]
+  , "enemies" .=
+      [ object
+          [ "id" .= e.enemyId, "word" .= e.enemyWord, "tier" .= e.enemyTier
+          , "x" .= e.enemyPos.vx, "y" .= e.enemyPos.vy, "distance" .= distanceToPlayer st e ]
+      | e <- st.enemies ]
+  ]
+
+-- | The summary as JSON text.
+stateSummaryText :: GameState -> Text
+stateSummaryText = decodeUtf8 . LBS.toStrict . encode . stateSummary

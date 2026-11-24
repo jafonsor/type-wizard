@@ -308,4 +308,14 @@
   window.TypeWizardRenderer = {
     create: create, viewport: viewport, start: start, draw: draw, stats: stats
   };
+
+  // Dev-only game state hook for the browser check. With `?hook` in the page
+  // URL, Haskell (Frontend.Game) writes a JSON summary of the GameState to
+  // `json` on every state change (Game.Debug.stateSummaryText); `state()`
+  // parses it, or returns null before the first state. Without `?hook` the
+  // summary is never built.
+  window.TypeWizardGame = {
+    json: null,
+    state: function () { return this.json === null ? null : JSON.parse(this.json); }
+  };
 })();

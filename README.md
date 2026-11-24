@@ -4,7 +4,7 @@ A top-down typing game in Haskell compiled to wasm (reflex-dom, Obelisk v2). The
 
 ## Layout
 
-- `common`: shared code (`Common.Route`) and the pure game modules (`Game.Settings`, `Game.Save`), with a test-suite.
+- `common`: shared code (`Common.Route`) and the pure game modules (`Game.Settings`, `Game.Save`, `Game.Words`, `Game.State`, `Game.Layout`, `Game.Scene`, `Game.Debug`), with a test-suite. `Game.Scene` imports the renderer's types, so `common` depends on `renderer`; `Game.State` and `Game.Words` do not.
 - `renderer`: the 2D renderer library (`Renderer` is the whole interface; `Renderer.Internal` is the pure layer, exposed for its tests), with a test-suite. Its JS executor is `static/src/js/renderer.js`.
 - `frontend`: the browser app (`Frontend`, `Frontend.Page`, `Frontend.Game`, `Frontend.Storage`, `Frontend.Words`, `Frontend.Bench`). `frontend/wasm` and `frontend/js` are Obelisk wrapper packages that cross-compile it.
 - `backend`: a stub that serves the page and its files. No game logic.
@@ -38,7 +38,7 @@ In the dev shell, `ob-run` (or `cabal build`) works for quick native iteration; 
 
 ## Tests
 
-The pure tests (`common/test` and `renderer/test`, HUnit) run as flake checks:
+The pure tests (`common/test` and `renderer/test`, HUnit) run as flake checks (`common-test` covers settings, save, words, `step` and `buildScene`; `renderer-test` the renderer's pure layer):
 
 ```
 nix build .#checks.aarch64-darwin.common-test --cores 4 -L    # use your own system in place of aarch64-darwin
@@ -75,7 +75,7 @@ How a frame works:
 
 Serve the built page (see "Deploy") and open the Game page (Play). Check:
 
-1. A dark window with a white square in the middle, a dot grid, `Type Wizard renderer demo` at the top and `Esc: menu` at the bottom-left; the Menu button is clickable.
+1. A dark window with a white square in the middle and a dot grid; from the first Enemy on (see "Game network") coloured squares with Words arrive; the Menu button is clickable. (The ticket 15 demo text is gone.)
 2. Resize the window: the square stays centred and 1.2 world units wide (a 20-unit world height is the window height), the dots keep their 2-unit spacing, nothing stretches or stays blurry.
 3. Change the device pixel ratio (drag the window between screens, or browser zoom, or DevTools device toolbar DPR): the picture stays sharp and the same size in CSS pixels. `canvas.width` is CSS width times `devicePixelRatio`.
 4. Click Menu: `TypeWizardRenderer.stats.stopped` becomes 1 and `frames` stops growing. Play again: `started` is 2 and `frames` grows.
@@ -83,6 +83,14 @@ Serve the built page (see "Deploy") and open the Game page (Play). Check:
 6. DevTools console: no errors while it runs.
 
 Results of the run for ticket 15 are in `.scratch/type-wizard/issues/15-renderer-and-empty-game-page.md`. The scripted version used a Chrome DevTools Protocol client (resize with `Emulation.setDeviceMetricsOverride`, pixels from `Page.captureScreenshot`).
+
+## Game network
+
+`Frontend.Game.gameCanvas` (per visit to the Game page): the render pull, run by JS's rAF once per frame, fires one `Tick` (the Frame time) and, when the viewport aspect changed, an `Aspect`; entering the page fires `Start seed` (seed from `Date.now()` and `performance.now()`). `mergeWith` joins the inputs into one event, `foldDyn` runs `Game.State.step` over them with the current Settings (read at `Start`, snapshotted in `GameState.roundSettings`), and `performEvent_` on `updated gameState` is the only writer of an `IORef (Maybe GameState)`. The pull peeks that cell (`Nothing` before the first state, then a fresh `buildScene` every frame). Never an `MVar`.
+
+`step` so far: Start, Tick (spawn along the per-Tier ramp, move, park at 1.1), Aspect; `Key` and `Tab` are ignored. Words: one shuffled bag per Tier (`Game.Words`); a spawn is deferred when every Word of the Tier's length is on screen.
+
+Dev hook: open the Game page with `?hook` (for example `http://localhost:8765/type-wizard/?hook`) and read `window.TypeWizardGame.state()` for a JSON summary of the state (phase, tier, spawned counts, Enemies with word, tier, x, y, distance). Without `?hook` nothing is written. To make a quick run set `localStorage['typewizard.settings']` (for example `{"version":1,"intervalStart":0.6,"intervalEnd":0.6,"enemySpeed":5,"enemiesPerTier":10,"lastTier":4}`) before the page loads.
 
 ### Measuring the JS boundary (dev only)
 

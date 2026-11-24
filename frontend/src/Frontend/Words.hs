@@ -11,6 +11,7 @@ module Frontend.Words
   ( wordsBytes
   , parseWords
   , allWords
+  , gameWords
   ) where
 
 import Data.ByteString (ByteString)
@@ -18,6 +19,8 @@ import Data.FileEmbed (embedFile, makeRelativeToProject)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding (decodeUtf8)
+
+import Game.Words qualified as Game
 
 wordsBytes :: ByteString
 wordsBytes = $(makeRelativeToProject "words/words.txt" >>= embedFile)
@@ -28,3 +31,8 @@ parseWords = filter (not . T.null) . map T.strip . T.lines . decodeUtf8
 
 allWords :: [Text]
 allWords = parseWords wordsBytes
+
+-- | The embedded list as the length buckets 'Game.Words' draws from; a
+-- top-level value, so it is built once.
+gameWords :: Game.Words
+gameWords = Game.mkWords allWords

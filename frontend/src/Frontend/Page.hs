@@ -18,7 +18,7 @@ import Text.Read (readMaybe)
 
 import Frontend.Game (gameCanvas)
 import Frontend.Storage (loadSave, loadSettings, storeSave, storeSettings)
-import Frontend.Words (allWords)
+import Frontend.Words (allWords, gameWords)
 import Game.Save (Save (..), emptySave)
 import Game.Settings qualified as S
 
@@ -72,7 +72,7 @@ pageWidget settings save = \case
     pure $ pageOnly $ leftmost [Game <$ play, Settings <$ settingsB]
   Game -> section "game" "Game" do
     menu <- button "Menu"
-    gameCanvas settings
+    gameCanvas gameWords settings
     pure $ pageOnly $ Start <$ menu
   Settings -> section "settings" "Settings" do
     back <- button "Back"

@@ -12,10 +12,13 @@ import Test.HUnit
 
 import Game.Save qualified as Save
 import Game.Settings
+import SceneTests (sceneTests)
+import StateTests (stateTests)
+import WordsTests (wordsTests)
 
 main :: IO ()
 main = do
-  result <- runTestTT (TestList [settingsTests, saveTests])
+  result <- runTestTT (TestList [settingsTests, saveTests, wordsTests, stateTests, sceneTests])
   unless (errors result == 0 && failures result == 0) (ioError (userError "tests failed"))
 
 field :: Text -> Field

@@ -182,8 +182,13 @@ library
     -- Modules exported by the library.
     exposed-modules:  Common
                       Common.Route
+                      Game.Debug
+                      Game.Layout
                       Game.Save
+                      Game.Scene
                       Game.Settings
+                      Game.State
+                      Game.Words
 
     -- Modules included in this library but not exported.
     -- other-modules:
@@ -195,8 +200,11 @@ library
     build-depends:    base
                     , aeson
                     , bytestring
+                    , containers
                     , obelisk-route
+                    , renderer
                     , scientific
+                    , splitmix
                     , text
 
     -- Directories containing source files.
@@ -207,10 +215,16 @@ test-suite common-test
     import:           common
     type:             exitcode-stdio-1.0
     main-is:          Main.hs
+    other-modules:    SceneTests
+                      StateTests
+                      WordsTests
     hs-source-dirs:   test
     build-depends:    base
                     , aeson
                     , bytestring
                     , common
+                    , containers
                     , HUnit
+                    , renderer
+                    , splitmix
                     , text
