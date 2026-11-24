@@ -7,6 +7,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Test.HUnit
 
+import Game.Save (emptySave)
 import Game.Settings (Settings (..))
 import Game.State
 import StateTests (runTicks, testWords, tinyCfg)
@@ -17,7 +18,7 @@ enemyAt i (x, y) w = Enemy { enemyId = i, enemyPos = Vec2 x y, enemyWord = w, en
 
 -- | A Running Round (fixed seed) holding exactly these Enemies.
 roundWith :: [Enemy] -> GameState
-roundWith es = (step tinyCfg testWords (Start 1) initialState) { enemies = es, nextEnemyId = length es }
+roundWith es = (step tinyCfg testWords (Start 1 emptySave) initialState) { enemies = es, nextEnemyId = length es }
 
 press :: Input -> GameState -> GameState
 press = step tinyCfg testWords
@@ -214,7 +215,7 @@ phaseRows = TestLabel "phase" $ TestList
       press (Key '-') focused @?= focused
 
   , "Start resets Focus and the counters" ~: do
-      let st = step tinyCfg testWords (Start 2) (keys "cx" catDog)
+      let st = step tinyCfg testWords (Start 2 emptySave) (keys "cx" catDog)
       focusOf st @?= NoFocus
       tally st @?= (0, 0, 0)
       st.kills @?= 0

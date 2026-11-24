@@ -4,9 +4,18 @@
 -- and returns the next state. The random generator is a field, seeded by
 -- 'Start', so a fixed seed gives a fixed game.
 --
--- This slice holds spawning, movement and typing (spec section 4's table:
--- Focus, Typo, Lock, Tab, Kill). Streak, Bonus and Points belong to the
--- scoring slice, which hooks in at 'onTypo' and 'onKill'.
+-- This slice holds spawning, movement, typing (spec section 4's table: Focus,
+-- Typo, Lock, Tab, Kill) and scoring ('onTypo' and 'onKill', below).
+--
+-- /Scoring./ A Kill increments the Streak first, then pays @1 + floor
+-- (Streak / group size)@ Points (group size is the Round's snapshot of the
+-- @streakGroupSize@ setting; no cap). A Typo clears the Streak at once; Tab
+-- and wrong letters while Locked do not touch it. 'streakBonus' and 'meterFill'
+-- are derived from the Streak, so a Typo clears them with it. 'longestStreak'
+-- counts only this Round's consecutive Kills (from 0 at 'Start', whatever
+-- Streak was carried in). 'Start' carries the saved progress in (its Streak
+-- and Total Points; the saved Bonus is ignored and re-derived). Points are
+-- /not/ banked into 'totalPoints' here: that is the Round-end slice's job.
 --
 -- /Typing./ Input is handled only while the Phase is Running. Only a-z
 -- letters are Keystrokes ('Key' with anything else is ignored). The Focus is
@@ -50,6 +59,10 @@ module Game.State
   , wpm
   , correctChars
   , focusedEnemy
+    -- * Scoring
+  , streakBonus
+  , meterFill
+  , progressSave
   ) where
 
 import Control.Applicative ((<|>))
@@ -64,6 +77,8 @@ import Data.Word (Word64)
 import System.Random.SplitMix (SMGen, mkSMGen, nextDouble, unseedSMGen)
 
 import Game.Layout (contactDistance, defaultAspect)
+import Game.Save (Save)
+import Game.Save qualified as Save
 import Game.Settings (Settings (..), defaultSettings)
 import Game.Words (Bag, Words, bucket, drawWord, emptyBag)
 
@@ -126,6 +141,15 @@ data GameState = GameState
   , wrongKeys :: Int -- ^ Focused Typos plus wrong letters while Locked
   , typos :: Int -- ^ Typos this Round (not the wrong letters while Locked)
   , kills :: Int
+  , streak :: Int -- ^ consecutive Kills, carried in at 'Start'; a Typo clears it
+  , roundPoints :: Int -- ^ Points earned this Round
+  , runKills :: Int -- ^ consecutive Kills this Round (0 at 'Start', cleared by a Typo)
+  , longestStreak :: Int -- ^ the longest 'runKills' this Round
+  , totalPoints :: Int -- ^ Total Points as carried in at 'Start' (banking is the Round-end slice's)
+  , groupCompletedAt :: Maybe Double
+    -- ^ 'roundTime' of the latest Kill that completed a group (the meter then
+    -- reads empty again: full-then-clears). A Typo clears it. The animation
+    -- reads it; the state itself only records it.
   , roundTime :: Double -- ^ seconds of Round time (sum of the clamped Tick steps)
   , firstKeyAt :: Maybe Double -- ^ 'roundTime' at the first Keystroke
   }
@@ -135,7 +159,10 @@ data Input
   = Key Char -- ^ a lowercase a-z Keystroke (the JS shim filters; anything else is ignored)
   | Tab -- ^ clears Focus and Lock
   | Tick Double -- ^ the frame time in seconds (the rAF clock)
-  | Start Seed
+  | Start Seed Save
+    -- ^ the seed, and the saved progress carried in: the Streak (the Bonus
+    -- and the meter follow from it) and the Total Points. The page reads it
+    -- from the app's @Dynamic Save@ when it fires this.
   | Aspect Double
     -- ^ the view's width over height; the spawn ring depends on it. It is an
     -- input (not carried by 'Tick') so 'Tick' keeps the spec's shape, and it
@@ -162,13 +189,19 @@ initialState = GameState
   , wrongKeys = 0
   , typos = 0
   , kills = 0
+  , streak = 0
+  , roundPoints = 0
+  , runKills = 0
+  , longestStreak = 0
+  , totalPoints = 0
+  , groupCompletedAt = Nothing
   , roundTime = 0
   , firstKeyAt = Nothing
   }
 
 step :: Settings -> Words -> Input -> GameState -> GameState
 step settings ws input st = case input of
-  Start seed -> startRound settings seed st
+  Start seed carried -> startRound settings seed carried st
   Tick now | st.phase == Running -> tick ws now st
   Key c | st.phase == Running, c >= 'a' && c <= 'z' -> keystroke c st
   Tab | st.phase == Running -> st { focus = NoFocus }
@@ -177,9 +210,11 @@ step settings ws input st = case input of
 
 -- | Round start (spec section 4): first Tier, empty field, counters 0. The
 -- view aspect carries over.
-startRound :: Settings -> Seed -> GameState -> GameState
-startRound settings seed st = initialState
+startRound :: Settings -> Seed -> Save -> GameState -> GameState
+startRound settings seed carried st = initialState
   { phase = Running
+  , streak = max 0 carried.streak
+  , totalPoints = max 0 carried.totalPoints
   , roundSettings = settings
   , currentTier = settings.firstTier
   , rng = Rng (mkSMGen seed)
@@ -328,19 +363,55 @@ advanceWord e k st
   | k >= T.length e.enemyWord = onKill e st
   | otherwise = st { focus = Focused e.enemyId k }
 
--- | The Kill: the Enemy goes, the Focus drops. The scoring slice adds Streak,
--- Bonus and Points here.
+-- | The Kill: the Enemy goes, the Focus drops, the Streak goes up by one and
+-- /then/ the Kill pays @1 + floor (new Streak / group size)@ Points.
 onKill :: Enemy -> GameState -> GameState
 onKill e st = st
   { enemies = filter ((/= e.enemyId) . (.enemyId)) st.enemies
   , focus = NoFocus
   , kills = st.kills + 1
+  , streak = streak'
+  , roundPoints = st.roundPoints + 1 + streak' `div` size
+  , runKills = run
+  , longestStreak = max st.longestStreak run
+  , groupCompletedAt = if streak' `mod` size == 0 then Just st.roundTime else st.groupCompletedAt
+  }
+  where
+    size = groupSize st
+    streak' = st.streak + 1
+    run = st.runKills + 1
+
+-- | A Typo at letter k of Enemy i: the Word locks, expecting the same letter,
+-- and the Streak (so the Bonus and the meter) clears at once. 'longestStreak'
+-- keeps the best run so far.
+onTypo :: Int -> Int -> GameState -> GameState
+onTypo i k st = st
+  { focus = Locked i k
+  , typos = st.typos + 1
+  , streak = 0
+  , runKills = 0
+  , groupCompletedAt = Nothing
   }
 
--- | A Typo at letter k of Enemy i: the Word locks, expecting the same letter.
--- The scoring slice clears Streak, Bonus and the Streak Meter here.
-onTypo :: Int -> Int -> GameState -> GameState
-onTypo i k st = st { focus = Locked i k, typos = st.typos + 1 }
+-- | The Round's group size (at least 1, so a hand-made state cannot divide by 0).
+groupSize :: GameState -> Int
+groupSize st = max 1 st.roundSettings.streakGroupSize
+
+-- | Bonus: the completed groups of the Streak, @floor (Streak / group size)@.
+streakBonus :: GameState -> Int
+streakBonus st = st.streak `div` groupSize st
+
+-- | The Streak Meter's fill, 0 up to (not including) 1: progress through the
+-- current group, @(Streak mod group size) / group size@. A Kill that completes
+-- a group leaves 0 (see 'groupCompletedAt' for the full-then-clears moment).
+meterFill :: GameState -> Double
+meterFill st = fromIntegral (st.streak `mod` groupSize st) / fromIntegral (groupSize st)
+
+-- | The saved progress after the state's latest change: the Streak and its
+-- Bonus (derived with the Round's group size, so the stored pair is
+-- consistent), the Total Points left as they were.
+progressSave :: GameState -> Save -> Save
+progressSave st sv = sv { Save.streak = st.streak, Save.bonus = streakBonus st }
 
 correct, wrong :: GameState -> GameState
 correct st = (stamp st) { correctKeys = st.correctKeys + 1 }

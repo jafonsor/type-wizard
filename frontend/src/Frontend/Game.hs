@@ -9,7 +9,8 @@
 -- * the render pull (which the JS-owned rAF loop calls once per frame) fires
 --   one @Tick@ with the frame time through @newTriggerEvent@, and an @Aspect@
 --   when the viewport's aspect ratio changes;
--- * entering the page fires @Start seed@ with a clock-derived seed;
+-- * entering the page fires @Start seed save@ with a clock-derived seed and
+--   the app's current 'Save' (the carried-in Streak and Total Points);
 -- * the key shim (@static/src/js/keys.js@) listens to @keydown@ on @window@
 --   while this canvas is attached and fires one @Key c@ or @Tab@ per
 --   Keystroke through @newTriggerEvent@ (Tab's default is prevented in JS);
@@ -18,6 +19,11 @@
 --   @MVar@: the pull only peeks and never blocks);
 -- * the pull returns @Nothing@ until the first state exists, then a freshly
 --   built 'Scene' on every frame.
+--
+-- Scoring is persisted from here: each new state in which a Kill or a Typo
+-- just happened fires one @Save -> Save@ edit (the Streak and its Bonus) that
+-- the page switch applies to the app's @Dynamic Save@ and stores. Total Points
+-- are not touched (the Round-end slice banks them).
 --
 -- Dev hook: with @?hook@ in the page URL each new state also writes a JSON
 -- summary to @window.TypeWizardGame.json@ (@TypeWizardGame.state()@ parses
@@ -37,6 +43,7 @@ import Reflex.Dom.Core
 
 import Frontend.Bench (runBench)
 import Game.Debug (stateSummaryText)
+import Game.Save (Save)
 import Game.Scene (buildScene)
 import Game.Settings (Settings)
 import Game.State (GameState (..), initialState, step)
@@ -50,8 +57,8 @@ import Renderer
 -- page opens, so editing them elsewhere never changes a Round.
 gameCanvas
   :: (DomBuilder t m, Prerender t m)
-  => Words -> Dynamic t Settings -> m ()
-gameCanvas ws settings = prerender_ blank do
+  => Words -> Dynamic t Settings -> Dynamic t Save -> m (Event t (Save -> Save))
+gameCanvas ws settings save = fmap switchDyn $ prerender (pure never) do
   (canvas, _) <- elAttr' "canvas" ("class" =: "game-canvas") blank
   pb <- getPostBuild
   (tickE, fireTick) <- newTriggerEvent
@@ -65,13 +72,18 @@ gameCanvas ws settings = prerender_ blank do
   -- are different events and may fire together.
   seedE <- performEvent (liftJSM clockSeed <$ pb)
   let inputs = mergeWith (<>)
-        [ pure . S.Start <$> seedE
+        [ pure <$> attachWith (\sv sd -> S.Start sd sv) (current save) seedE
         , pure . S.Tick <$> tickE
         , pure . S.Aspect <$> aspectE
         , pure <$> keyE
         ]
   gameState <- foldDyn (\(s, is) st -> foldl' (flip (step s ws)) st is) initialState
     (attachWith (,) (current settings) inputs)
+
+  -- A Kill or a Typo just happened: persist the Streak (and its Bonus).
+  let progress = attachWithMaybe
+        (\old new -> if new.kills > old.kills || new.typos > old.typos then Just (S.progressSave new) else Nothing)
+        (current gameState) (updated gameState)
 
   -- The only writer of the handoff cell.
   performEvent_ $ ffor (updated gameState) \st -> do
@@ -100,6 +112,7 @@ gameCanvas ws settings = prerender_ blank do
   dyn_ $ ffor failure \case
     Nothing -> blank
     Just err -> elAttr "p" ("class" =: "game-error" <> "data-error" =: "renderer") (text err)
+  pure progress
 
 -- | What the key shim sends: @"Tab"@ or one lowercase letter.
 keyInput :: Text -> S.Input

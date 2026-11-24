@@ -7,6 +7,7 @@ import Data.Text qualified as T
 import Test.HUnit
 
 import Game.Layout (contactDistance)
+import Game.Save (emptySave)
 import Game.Settings (Settings (..), defaultSettings)
 import Game.State
 import Game.Words (Words, mkWords)
@@ -33,7 +34,7 @@ runTicks cfg ws seed dt n = last (trace cfg ws seed dt n)
 
 -- | The state after Start and after each Tick.
 trace :: Settings -> Words -> Seed -> Double -> Int -> [GameState]
-trace cfg ws seed dt n = scanl (flip (step cfg ws)) (step cfg ws (Start seed) initialState)
+trace cfg ws seed dt n = scanl (flip (step cfg ws)) (step cfg ws (Start seed emptySave) initialState)
   (ticksOf (\i -> 100 + dt * i) n)
 
 -- | Ticks at times given by a function of the index, for indices 0 to n.
@@ -68,7 +69,7 @@ startTests = TestLabel "start" $ TestList
       step tinyCfg testWords (Tick 5) initialState @?= initialState
 
   , "Start runs the Round: first Tier, empty field, counters 0, Player at the origin" ~: do
-      let st = step tinyCfg { firstTier = 5, lastTier = 5 } testWords (Start 42) initialState
+      let st = step tinyCfg { firstTier = 5, lastTier = 5 } testWords (Start 42 emptySave) initialState
       st.phase @?= Running
       st.currentTier @?= 5
       st.enemies @?= []
@@ -79,7 +80,7 @@ startTests = TestLabel "start" $ TestList
   , "Start snapshots the Settings: later Settings arguments do not change the Round" ~: do
       let cfgA = tinyCfg { enemySpeed = 4 }
           cfgB = tinyCfg { enemySpeed = 0.2, maxTickDt = 0.5 }
-          st0 = step cfgA testWords (Start 1) initialState
+          st0 = step cfgA testWords (Start 1 emptySave) initialState
           st1 = foldl' (flip (step cfgB testWords)) st0 [Tick 0, Tick 0.1]
       st1.roundSettings @?= cfgA
       st1.roundSettings.enemySpeed @?= 4
@@ -87,7 +88,7 @@ startTests = TestLabel "start" $ TestList
   , "Start resets a Round in progress and keeps the view aspect" ~: do
       let mid = step tinyCfg testWords (Aspect 2) (runTicks tinyCfg testWords 1 0.05 400)
       assertBool "had Enemies" (not (null mid.enemies))
-      let again = step tinyCfg { firstTier = 4, lastTier = 4 } testWords (Start 2) mid
+      let again = step tinyCfg { firstTier = 4, lastTier = 4 } testWords (Start 2 emptySave) mid
       again.enemies @?= []
       again.spawnCounts @?= IntMap.empty
       again.currentTier @?= 4
@@ -97,7 +98,7 @@ startTests = TestLabel "start" $ TestList
       again.viewAspect @?= 2
 
   , "a bad aspect is ignored" ~: do
-      let st = step tinyCfg testWords (Start 1) initialState
+      let st = step tinyCfg testWords (Start 1 emptySave) initialState
       (step tinyCfg testWords (Aspect 0) st).viewAspect @?= st.viewAspect
       (step tinyCfg testWords (Aspect (-1)) st).viewAspect @?= st.viewAspect
   ]
@@ -105,21 +106,21 @@ startTests = TestLabel "start" $ TestList
 tickTests :: Test
 tickTests = TestLabel "tick" $ TestList
   [ "the first Tick after Start has dt 0" ~: do
-      let st = foldl' (flip (step tinyCfg testWords)) initialState [Start 1, Tick 1000]
+      let st = foldl' (flip (step tinyCfg testWords)) initialState [Start 1 emptySave, Tick 1000]
       st.sinceSpawn @?= 0
       st.lastTime @?= Just 1000
 
   , "dt is clamped to maxTickDt" ~: do
-      let st = foldl' (flip (step tinyCfg testWords)) initialState [Start 1, Tick 0, Tick 50]
+      let st = foldl' (flip (step tinyCfg testWords)) initialState [Start 1 emptySave, Tick 0, Tick 50]
       assertNear "sinceSpawn" 1e-12 tinyCfg.maxTickDt st.sinceSpawn
       st.lastTime @?= Just 50
 
   , "a Tick that goes back in time has dt 0" ~: do
-      let st = foldl' (flip (step tinyCfg testWords)) initialState [Start 1, Tick 10, Tick 5]
+      let st = foldl' (flip (step tinyCfg testWords)) initialState [Start 1 emptySave, Tick 10, Tick 5]
       st.sinceSpawn @?= 0
 
   , "a clamped Tick moves Enemies by speed times maxTickDt only" ~: do
-      let st0 = (step tinyCfg testWords (Start 1) initialState)
+      let st0 = (step tinyCfg testWords (Start 1 emptySave) initialState)
             { enemies = [Enemy 0 (Vec2 20 0) "cat" 3] }
           st = foldl' (flip (step tinyCfg testWords)) st0 [Tick 0, Tick 1000]
       case st.enemies of
@@ -204,14 +205,14 @@ movementTests = TestLabel "movement" $ TestList
 
   , "the ring follows the aspect, the world height and spawnRadius" ~: do
       let cfg = tinyCfg { spawnRadius = 3, worldHeight = 10 }
-          st0 = step cfg testWords (Aspect 2) (step cfg testWords (Start 1) initialState)
+          st0 = step cfg testWords (Aspect 2) (step cfg testWords (Start 1 emptySave) initialState)
           at = firstWithEnemy (scanl (flip (step cfg testWords)) st0 (ticksOf (\i -> i * 0.1) 40))
       case at.enemies of
         [e] -> assertNear "radius" 1e-9 (sqrt (20 ^ (2 :: Int) + 10 ^ (2 :: Int)) / 2 + 3) (distanceToPlayer at e)
         _ -> assertFailure "one Enemy at the first spawn"
 
   , "the ring is centred on the Player, not the origin" ~: do
-      let st0 = (step tinyCfg testWords (Start 1) initialState) { playerPos = Vec2 5 (-3) }
+      let st0 = (step tinyCfg testWords (Start 1 emptySave) initialState) { playerPos = Vec2 5 (-3) }
           at = firstWithEnemy (scanl (flip (step tinyCfg testWords)) st0 (ticksOf (\i -> i * 0.1) 40))
       case at.enemies of
         [e] -> do
@@ -228,7 +229,7 @@ movementTests = TestLabel "movement" $ TestList
         && any (\e -> e.enemyPos.vy > 0) st.enemies && any (\e -> e.enemyPos.vy < 0) st.enemies)
 
   , "an Enemy moves toward the Player at enemySpeed units per second, along its ray" ~: do
-      let st0 = (step tinyCfg { intervalStart = 10, intervalEnd = 10 } testWords (Start 1) initialState)
+      let st0 = (step tinyCfg { intervalStart = 10, intervalEnd = 10 } testWords (Start 1 emptySave) initialState)
             { enemies = [Enemy 0 (Vec2 6 8) "cat" 3] }
           st = foldl' (flip (step tinyCfg testWords)) st0 (ticksOf (\i -> i * 0.1) 20)
       case st.enemies of
@@ -239,7 +240,7 @@ movementTests = TestLabel "movement" $ TestList
 
   , "an Enemy stops at contact distance and parks; the Player does not move" ~: do
       let cfg = tinyCfg { intervalStart = 10, intervalEnd = 10, enemySpeed = 5 }
-          st0 = (step cfg testWords (Start 1) initialState) { enemies = [Enemy 0 (Vec2 6 8) "cat" 3] }
+          st0 = (step cfg testWords (Start 1 emptySave) initialState) { enemies = [Enemy 0 (Vec2 6 8) "cat" 3] }
           ticks n = foldl' (flip (step cfg testWords)) st0 (ticksOf (\i -> i * 0.1) n)
           parked = ticks 40
           later = ticks 80
@@ -255,7 +256,7 @@ movementTests = TestLabel "movement" $ TestList
 
   , "an Enemy does not overshoot in the Tick that reaches contact" ~: do
       let cfg = tinyCfg { intervalStart = 10, intervalEnd = 10, enemySpeed = 5, maxTickDt = 0.5 }
-          st0 = (step cfg testWords (Start 1) initialState) { enemies = [Enemy 0 (Vec2 1.5 0) "cat" 3] }
+          st0 = (step cfg testWords (Start 1 emptySave) initialState) { enemies = [Enemy 0 (Vec2 1.5 0) "cat" 3] }
           st = foldl' (flip (step cfg testWords)) st0 [Tick 0, Tick 0.5]
       case st.enemies of
         [e] -> assertNear "x" 1e-9 contactDistance e.enemyPos.vx

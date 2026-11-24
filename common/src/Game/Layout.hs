@@ -11,6 +11,12 @@ module Game.Layout
   , dotSpacing
   , dotRadius
   , defaultAspect
+  , meterSize
+  , meterOffset
+  , bonusLabelOffset
+  , bonusLabelHeight
+  , hudMargin
+  , hudTextHeight
   ) where
 
 -- | The Player is a square of this side.
@@ -43,3 +49,23 @@ dotRadius = 0.08
 -- real one: 16:9.
 defaultAspect :: Double
 defaultAspect = 16 / 9
+
+-- | The Streak Meter: a bar of this width and height ...
+meterSize :: (Double, Double)
+meterSize = (2, 0.25)
+
+-- | ... centred this far above the Player's centre.
+meterOffset :: Double
+meterOffset = 1.6
+
+-- | The "+N" label: its left edge sits this far to the right of the Player's
+-- centre (past the bar's right end) at the bar's height; its text height.
+bonusLabelOffset, bonusLabelHeight :: Double
+bonusLabelOffset = 1.4
+bonusLabelHeight = 0.8
+
+-- | The HUD's distance from the screen edges and its text height, in world
+-- height units (the overlay's units).
+hudMargin, hudTextHeight :: Double
+hudMargin = 0.6
+hudTextHeight = 0.8

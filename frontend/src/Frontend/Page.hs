@@ -72,8 +72,8 @@ pageWidget settings save = \case
     pure $ pageOnly $ leftmost [Game <$ play, Settings <$ settingsB]
   Game -> section "game" "Game" do
     menu <- button "Menu"
-    gameCanvas gameWords settings
-    pure $ pageOnly $ Start <$ menu
+    progress <- gameCanvas gameWords settings save
+    pure (pageOnly (Start <$ menu)) { saveEdit = progress }
   Settings -> section "settings" "Settings" do
     back <- button "Back"
     groupEdits <- traverse (settingsGroup settings) S.groups
