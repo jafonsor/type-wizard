@@ -20,6 +20,13 @@ module Game.Layout
   , hintTextHeight
   , lifeSize
   , lifeGap
+  , shotLength
+  , shotWidth
+  , plusSize
+  , plusBarThickness
+  , plusMaxDelay
+  , plusShrinkTime
+  , plusShrinkScale
   ) where
 
 -- | The Player is a square of this side.
@@ -81,3 +88,25 @@ hintTextHeight = 0.6
 lifeSize, lifeGap :: Double
 lifeSize = 0.4
 lifeGap = 0.2
+
+-- | The Shot is a triangle this long (spec section 9) and this wide.
+shotLength, shotWidth :: Double
+shotLength = 0.5
+shotWidth = 0.3
+
+-- | A Plus Sign is this big (both bars' length) and each bar is this thick,
+-- as a fraction of that size.
+plusSize, plusBarThickness :: Double
+plusSize = 0.5
+plusBarThickness = 0.2
+
+-- | Each Plus Sign's random extra wait before it flies is 0 to this many
+-- seconds (spec section 9; fixed, not a setting).
+plusMaxDelay :: Double
+plusMaxDelay = 0.15
+
+-- | Over the last 'plusShrinkTime' seconds of its flight a Plus Sign shrinks
+-- to 'plusShrinkScale' times its size and fades out.
+plusShrinkTime, plusShrinkScale :: Double
+plusShrinkTime = 0.15
+plusShrinkScale = 0.3

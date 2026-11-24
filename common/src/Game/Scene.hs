@@ -33,7 +33,9 @@ import Renderer
 
 import Game.Layout
 import Game.Settings (Settings (..))
-import Game.State (Enemy (..), Focus (..), GameState (..), Vec2 (..), meterFill, streakBonus)
+import Game.State
+  ( Enemy (..), Focus (..), GameState (..), KillAnim (..), PlusSign (..), Vec2 (..)
+  , meterFill, shotArrival, signEnd, signFlyStart, streakBonus )
 
 buildScene :: Settings -> Frame -> GameState -> Scene
 buildScene cfg frame st = Scene
@@ -44,10 +46,63 @@ buildScene cfg frame st = Scene
       , Square (at (v2 st.playerPos) (realToFrac playerSize) (realToFrac playerSize)) (hexColour cfg.playerColour)
       , meterNodes cfg st
       ] <> concatMap (enemyNodes cfg st.focus) st.enemies
+        <> concatMap (killNodes cfg frame.time) st.killAnims
   , sceneOverlay = hudNodes cfg frame st
   }
   where
     worldH = realToFrac cfg.worldHeight
+
+-- | The animations of one Kill at time @t@ (the frame time; the builder's
+-- clock is the records' clock, see "Game.State"), in draw order: the dying
+-- Enemy's square (no Word) until the Shot arrives, the Shot, then the Plus
+-- Signs. Nothing before the record's own parts begin or after they end.
+--
+-- The Shot is a triangle 'shotLength' long (its centre travels from the
+-- Player to the Enemy's position with quadratic ease-out, pointing along
+-- travel) in the 'shotColour' of the Streak after the Kill. When it arrives
+-- the Enemy square goes and the signs appear at the Enemy's position plus
+-- their offset, hold, then fly to the Player with quadratic ease-in after
+-- their own delay, shrinking to 'plusShrinkScale' and fading over the last
+-- 'plusShrinkTime' of the flight, and go on reaching the Player.
+killNodes :: Settings -> Double -> KillAnim -> [Node]
+killNodes cfg t k = dying <> shot <> concatMap sign k.kaSigns
+  where
+    shotCol = shotColour cfg k.kaStreak
+    arrival = shotArrival k
+    from = v2 k.kaFrom
+    to = v2 k.kaTo
+    V2 fx fy = from
+    V2 tx ty = to
+    (dx, dy) = (tx - fx, ty - fy)
+    dying =
+      [ Square (at to (realToFrac enemySize) (realToFrac enemySize)) (tierColour cfg k.kaTier) | t < arrival ]
+    shot =
+      [ Triangle (Transform (lerpV from to (realToFrac (easeOut p))) (atan2 dy dx) (V2 (realToFrac shotLength) (realToFrac shotWidth))) shotCol
+      | t < arrival
+      , let p = clamp01 ((t - k.kaStart) / k.kaShotDur) ]
+    sign p
+      | t < arrival || t >= signEnd k p = []
+      | otherwise = [Group (Transform pos 0 (V2 sz sz)) [bar 1 th, bar th 1]]
+      where
+        fly = clamp01 ((t - signFlyStart k p) / k.kaFly)
+        start = v2 (Vec2 (k.kaTo.vx + p.psOffset.vx) (k.kaTo.vy + p.psOffset.vy))
+        pos = lerpV start from (realToFrac (fly * fly))
+        end = signEnd k p
+        u = clamp01 ((t - (end - shrink)) / shrink)
+        shrink = min plusShrinkTime k.kaFly
+        sz = realToFrac (plusSize * (1 - (1 - plusShrinkScale) * u))
+        th = realToFrac plusBarThickness
+        Colour r g b _ = shotCol
+        bar w h = Square (Transform (V2 0 0) 0 (V2 w h)) (Colour r g b (realToFrac (1 - u)))
+
+easeOut :: Double -> Double
+easeOut p = 1 - (1 - p) * (1 - p)
+
+clamp01 :: Double -> Double
+clamp01 = max 0 . min 1
+
+lerpV :: V2 -> V2 -> Float -> V2
+lerpV (V2 ax ay) (V2 bx bY) f = V2 (ax + (bx - ax) * f) (ay + (bY - ay) * f)
 
 -- | The Streak Meter and the Bonus label, one 'Group' at the Player.
 meterNodes :: Settings -> GameState -> Node

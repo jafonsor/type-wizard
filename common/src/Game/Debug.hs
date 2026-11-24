@@ -47,6 +47,15 @@ stateSummary st = object
   , "paused" .= st.paused
   , "windowFocused" .= st.windowFocused
   , "roundTime" .= st.roundTime
+  , "lastTime" .= st.lastTime
+  , "killAnims" .= length st.killAnims
+  , "shots" .= maybe 0 (\t -> activeShots t st) st.lastTime
+  , "plusSigns" .= maybe 0 (\t -> activePlusSigns t st) st.lastTime
+  , "anims" .=
+      [ object
+          [ "start" .= k.kaStart, "from" .= vec k.kaFrom, "to" .= vec k.kaTo, "streak" .= k.kaStreak
+          , "points" .= k.kaPoints, "signs" .= length k.kaSigns, "end" .= killAnimEnd k ]
+      | k <- st.killAnims ]
   , "roundResult" .= fmap resultSummary st.roundResult
   , "enemies" .=
       [ object
@@ -54,6 +63,9 @@ stateSummary st = object
           , "x" .= e.enemyPos.vx, "y" .= e.enemyPos.vy, "distance" .= distanceToPlayer st e ]
       | e <- st.enemies ]
   ]
+
+vec :: Vec2 -> Value
+vec p = object ["x" .= p.vx, "y" .= p.vy]
 
 resultSummary :: RoundResult -> Value
 resultSummary r = object

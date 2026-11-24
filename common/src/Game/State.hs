@@ -59,6 +59,23 @@
 -- 'intervalEnd'. After 'enemiesPerTier' spawns the Tier advances (up to
 -- 'lastTier') and the next Tier's ramp starts again at 'intervalStart'.
 --
+-- /Kill animations./ A Kill also appends one 'KillAnim' record (the Shot and
+-- the Plus Signs of that Kill) to 'killAnims'. A record is a start time plus
+-- the endpoints, durations and per-sign random parameters, all fixed at the
+-- Kill; the scene builder evaluates and eases it at its own @Frame.time@. The
+-- step only creates records (at a Kill) and drops expired ones (on a Tick).
+--
+-- /Time base./ The record's start is 'lastTime', the previous Tick's raw
+-- timestamp: the same clock as the builder's @Frame.time@ (both are the rAF
+-- timestamp in seconds; 'roundTime' is a different, clamped clock and is not
+-- used). A Kill comes from a key event between two frames, so it starts up
+-- to one frame early (0 before any Tick). Expiry compares the Tick's raw
+-- timestamp with the record's end, in every Phase, so a blur (Ticks still
+-- arrive and move 'lastTime'), the paused state and Round end ('Over') all
+-- keep expiring records; 'Over' ignores everything else on a Tick. Records
+-- survive 'endRound' and finish behind the Summary; only 'Start' (a new
+-- Round) clears them.
+--
 -- /Order inside a Tick./ Existing Enemies move first, then due Enemies spawn
 -- at the ring, so an Enemy is on the ring exactly in the Tick it appears.
 module Game.State
@@ -84,6 +101,15 @@ module Game.State
   , wpm
   , correctChars
   , focusedEnemy
+    -- * Kill animations
+  , KillAnim (..)
+  , PlusSign (..)
+  , killAnimEnd
+  , shotArrival
+  , signFlyStart
+  , signEnd
+  , activeShots
+  , activePlusSigns
     -- * Scoring
   , streakBonus
   , meterFill
@@ -103,10 +129,12 @@ import Data.List (minimumBy)
 import Data.Ord (comparing)
 import Data.Text (Text)
 import Data.Text qualified as T
+import Data.Bits (xor)
+import Data.Maybe (fromMaybe)
 import Data.Word (Word64)
 import System.Random.SplitMix (SMGen, mkSMGen, nextDouble, unseedSMGen)
 
-import Game.Layout (contactDistance, defaultAspect)
+import Game.Layout (contactDistance, defaultAspect, plusMaxDelay)
 import Game.Save (Save)
 import Game.Save qualified as Save
 import Game.Settings (Settings (..), defaultSettings)
@@ -187,8 +215,63 @@ data GameState = GameState
   , paused :: Bool -- ^ the window lost focus; the Round logic is frozen
   , windowFocused :: Bool -- ^ the window has focus (after a 'Blur', until 'Focus')
   , roundResult :: Maybe RoundResult -- ^ set when the Round ends ('Over')
+  , killAnims :: [KillAnim] -- ^ the Shots and Plus Signs in flight, oldest first
+  , animRng :: Rng
+    -- ^ the generator for the Plus Signs' random parameters, derived from the
+    -- Round's seed; separate from 'rng' so animations never change the Words
+    -- or spawn angles of a seed
   }
   deriving stock (Eq, Show)
+
+-- | The animations of one Kill (spec sections 6 and 9): a Shot from the Player
+-- to the Enemy's position, then, when it arrives, the Plus Signs. Everything
+-- is fixed at the Kill; only the builder's clock moves.
+data KillAnim = KillAnim
+  { kaStart :: Double -- ^ the Tick clock (@Frame.time@ base) at the Kill
+  , kaFrom :: Vec2 -- ^ the Player's centre
+  , kaTo :: Vec2 -- ^ the Enemy's position at the Kill
+  , kaTier :: Int -- ^ the Enemy's Tier (colour of the dying square drawn until the Shot arrives)
+  , kaStreak :: Int -- ^ the Streak /after/ the Kill: the Shot colour and the Plus Signs' colour
+  , kaPoints :: Int -- ^ the Points paid (1 + Bonus), which may exceed the signs drawn
+  , kaShotDur :: Double
+  , kaHold :: Double
+  , kaFly :: Double -- ^ the three durations, from the Round's settings snapshot
+  , kaSigns :: [PlusSign] -- ^ one per Point, at most @plusDrawCap@
+  }
+  deriving stock (Eq, Show)
+
+-- | One Plus Sign: where it starts around the Enemy and how long it waits
+-- after its hold before flying.
+data PlusSign = PlusSign
+  { psOffset :: Vec2
+  , psDelay :: Double
+  }
+  deriving stock (Eq, Show)
+
+-- | When the Shot arrives: the Enemy square goes and the Plus Signs appear.
+shotArrival :: KillAnim -> Double
+shotArrival k = k.kaStart + k.kaShotDur
+
+-- | When a sign leaves its hold and starts to fly.
+signFlyStart :: KillAnim -> PlusSign -> Double
+signFlyStart k p = shotArrival k + k.kaHold + p.psDelay
+
+-- | When a sign reaches the Player and is removed.
+signEnd :: KillAnim -> PlusSign -> Double
+signEnd k p = signFlyStart k p + k.kaFly
+
+-- | When the whole record is over: its last sign has reached the Player (the
+-- Shot's own end if there are no signs).
+killAnimEnd :: KillAnim -> Double
+killAnimEnd k = maximum (shotArrival k : map (signEnd k) k.kaSigns)
+
+-- | Shots in flight at a time (the Dev hook's count).
+activeShots :: Double -> GameState -> Int
+activeShots t st = length [ () | k <- st.killAnims, t < shotArrival k ]
+
+-- | Plus Signs on show at a time (arrived, not yet at the Player).
+activePlusSigns :: Double -> GameState -> Int
+activePlusSigns t st = length [ () | k <- st.killAnims, p <- k.kaSigns, t >= shotArrival k, t < signEnd k p ]
 
 -- | What a finished Round reports (the Round Summary's rows and the payload
 -- of @RoundEnded@). 'resTotalPoints' is the Total Points after banking.
@@ -253,13 +336,16 @@ initialState = GameState
   , paused = False
   , windowFocused = True
   , roundResult = Nothing
+  , killAnims = []
+  , animRng = Rng (mkSMGen 0)
   }
 
 step :: Settings -> Words -> Input -> GameState -> GameState
 step settings ws input st = case input of
   Start seed carried -> startRound settings seed carried st
-  Tick now | st.phase == Running, st.paused -> st { lastTime = Just now }
-  Tick now | st.phase == Running -> tick ws now st
+  Tick now | st.phase == Running, st.paused -> expire now st { lastTime = Just now }
+  Tick now | st.phase == Running -> expire now (tick ws now st)
+  Tick now | st.phase == Over -> expire now st -- finish the animations behind the Summary, nothing else
   Key _ | st.phase == Running, st.paused -> wake st
   Tab | st.phase == Running, st.paused -> wake st
   Click | st.phase == Running, st.paused -> wake st
@@ -281,8 +367,13 @@ startRound settings seed carried st = initialState
   , currentTier = settings.firstTier
   , lives = max 1 settings.startingLives
   , rng = Rng (mkSMGen seed)
+  , animRng = Rng (mkSMGen (seed `xor` 0x9e3779b97f4a7c15))
   , viewAspect = st.viewAspect
   }
+
+-- | Drops the records that are over at this Tick's timestamp.
+expire :: Double -> GameState -> GameState
+expire now st = st { killAnims = filter ((> now) . killAnimEnd) st.killAnims }
 
 -- | A 'Key', 'Tab' or 'Click' while paused: resumes if the window has its focus
 -- back; either way the input is swallowed (never a Keystroke).
@@ -513,15 +604,46 @@ onKill e st = st
   , focus = NoFocus
   , kills = st.kills + 1
   , streak = streak'
-  , roundPoints = st.roundPoints + 1 + streak' `div` size
+  , roundPoints = st.roundPoints + points
   , runKills = run
   , longestStreak = max st.longestStreak run
   , groupCompletedAt = if streak' `mod` size == 0 then Just st.roundTime else st.groupCompletedAt
+  , killAnims = st.killAnims <> [anim]
+  , animRng = Rng g'
   }
   where
     size = groupSize st
     streak' = st.streak + 1
+    points = 1 + streak' `div` size
     run = st.runKills + 1
+    cfg = st.roundSettings
+    (signs, g') = drawSigns cfg.plusSpreadRadius (min points (max 0 cfg.plusDrawCap)) (unRng st.animRng)
+    anim = KillAnim
+      { kaStart = fromMaybe 0 st.lastTime
+      , kaFrom = st.playerPos
+      , kaTo = e.enemyPos
+      , kaTier = e.enemyTier
+      , kaStreak = streak'
+      , kaPoints = points
+      , kaShotDur = cfg.shotDuration
+      , kaHold = cfg.plusHold
+      , kaFly = cfg.plusFlyDuration
+      , kaSigns = signs
+      }
+
+-- | n signs: an offset uniform in the disc of the spread radius and a delay
+-- uniform in 0 to 'plusMaxDelay', three draws each.
+drawSigns :: Double -> Int -> SMGen -> ([PlusSign], SMGen)
+drawSigns radius n g0 = go n g0 []
+  where
+    go 0 g acc = (reverse acc, g)
+    go i g acc =
+      let (a, g1) = nextDouble g
+          (b, g2) = nextDouble g1
+          (c, g3) = nextDouble g2
+          r = radius * sqrt b
+          ang = 2 * pi * a
+      in go (i - 1 :: Int) g3 (PlusSign (Vec2 (r * cos ang) (r * sin ang)) (c * plusMaxDelay) : acc)
 
 -- | A Typo at letter k of Enemy i: the Word locks, expecting the same letter,
 -- and the Streak (so the Bonus and the meter) clears at once. 'longestStreak'
