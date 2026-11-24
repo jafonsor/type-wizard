@@ -14,11 +14,12 @@ import Game.Save qualified as Save
 import Game.Settings
 import SceneTests (sceneTests)
 import StateTests (stateTests)
+import TypingTests (typingTests)
 import WordsTests (wordsTests)
 
 main :: IO ()
 main = do
-  result <- runTestTT (TestList [settingsTests, saveTests, wordsTests, stateTests, sceneTests])
+  result <- runTestTT (TestList [settingsTests, saveTests, wordsTests, stateTests, typingTests, sceneTests])
   unless (errors result == 0 && failures result == 0) (ioError (userError "tests failed"))
 
 field :: Text -> Field

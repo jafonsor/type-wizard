@@ -26,6 +26,8 @@ frontendHead = do
   elAttr "script" ("src" =: static @"js/storage.js") blank
   -- The renderer's JS executor (the renderer package), also loaded first.
   elAttr "script" ("src" =: static @"js/renderer.js") blank
+  -- The Game page's key shim (Frontend.Game), loaded first as well.
+  elAttr "script" ("src" =: static @"js/keys.js") blank
 
 frontendBody :: ObeliskWidget t (R FrontendRoute) m => RoutedT t (R FrontendRoute) m ()
 frontendBody = elClass "main" "app" pageSwitch

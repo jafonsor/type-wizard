@@ -10,6 +10,9 @@
 --   one @Tick@ with the frame time through @newTriggerEvent@, and an @Aspect@
 --   when the viewport's aspect ratio changes;
 -- * entering the page fires @Start seed@ with a clock-derived seed;
+-- * the key shim (@static/src/js/keys.js@) listens to @keydown@ on @window@
+--   while this canvas is attached and fires one @Key c@ or @Tab@ per
+--   Keystroke through @newTriggerEvent@ (Tab's default is prevented in JS);
 -- * the inputs are merged into one event and folded with 'step';
 -- * every new state is written to an 'IORef' (the handoff cell, never an
 --   @MVar@: the pull only peeks and never blocks);
@@ -29,14 +32,15 @@ import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Word (Word64)
-import Language.Javascript.JSaddle (JSM, jsg, liftJSM, toJSVal, valToNumber, valToText, (!), (#), (<#))
+import Language.Javascript.JSaddle (JSM, function, jsg, liftJSM, toJSVal, valToNumber, valToText, (!), (#), (<#))
 import Reflex.Dom.Core
 
 import Frontend.Bench (runBench)
 import Game.Debug (stateSummaryText)
 import Game.Scene (buildScene)
 import Game.Settings (Settings)
-import Game.State (GameState (..), Input (..), initialState, step)
+import Game.State (GameState (..), initialState, step)
+import Game.State qualified as S
 import Game.Words (Words)
 import Renderer
 
@@ -52,6 +56,7 @@ gameCanvas ws settings = prerender_ blank do
   pb <- getPostBuild
   (tickE, fireTick) <- newTriggerEvent
   (aspectE, fireAspect) <- newTriggerEvent
+  (keyE, fireKey) <- newTriggerEvent
   cell <- liftIO (newIORef Nothing)
   hookOn <- liftIO (newIORef False)
   lastAspect <- liftIO (newIORef Nothing)
@@ -60,9 +65,10 @@ gameCanvas ws settings = prerender_ blank do
   -- are different events and may fire together.
   seedE <- performEvent (liftJSM clockSeed <$ pb)
   let inputs = mergeWith (<>)
-        [ pure . Start <$> seedE
-        , pure . Tick <$> tickE
-        , pure . Aspect <$> aspectE
+        [ pure . S.Start <$> seedE
+        , pure . S.Tick <$> tickE
+        , pure . S.Aspect <$> aspectE
+        , pure <$> keyE
         ]
   gameState <- foldDyn (\(s, is) st -> foldl' (flip (step s ws)) st is) initialState
     (attachWith (,) (current settings) inputs)
@@ -82,6 +88,11 @@ gameCanvas ws settings = prerender_ blank do
       Right r -> do
         search <- jsg ("location" :: Text) >>= (! ("search" :: Text)) >>= valToText
         liftIO (writeIORef hookOn ("hook" `T.isInfixOf` search))
+        raw' <- toJSVal (_element_raw canvas)
+        cb <- function \_ _ args -> case args of
+          a : _ -> valToText a >>= liftIO . fireKey . keyInput
+          [] -> pure ()
+        _ <- jsg ("TypeWizardKeys" :: Text) # ("attach" :: Text) $ (raw', cb)
         startRenderLoop r (pullScene cell lastAspect fireTick fireAspect)
         when ("bench" `T.isInfixOf` search) runBench
         pure Nothing
@@ -90,17 +101,24 @@ gameCanvas ws settings = prerender_ blank do
     Nothing -> blank
     Just err -> elAttr "p" ("class" =: "game-error" <> "data-error" =: "renderer") (text err)
 
+-- | What the key shim sends: @"Tab"@ or one lowercase letter.
+keyInput :: Text -> S.Input
+keyInput t = case T.unpack t of
+  "Tab" -> S.Tab
+  [c] -> S.Key c
+  _ -> S.Key ' ' -- ignored by 'step'
+
 -- | The render pull, run by JS's rAF task once per frame: fire the Tick (and
 -- the aspect when it changed), then peek the cell. It never blocks.
 pullScene
   :: IORef (Maybe GameState) -> IORef (Maybe Double) -> (Double -> IO ()) -> (Double -> IO ())
   -> Frame -> IO (Maybe Scene)
 pullScene cell lastAspect fireTick fireAspect frame = do
-  let aspect = realToFrac frame.viewport.aspect
+  let ratio = realToFrac frame.viewport.aspect
   seen <- readIORef lastAspect
-  when (seen /= Just aspect) do
-    writeIORef lastAspect (Just aspect)
-    fireAspect aspect
+  when (seen /= Just ratio) do
+    writeIORef lastAspect (Just ratio)
+    fireAspect ratio
   fireTick frame.time
   fmap (\st -> buildScene st.roundSettings frame st) <$> readIORef cell
 

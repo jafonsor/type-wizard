@@ -18,7 +18,7 @@ import Renderer
 
 import Game.Layout
 import Game.Settings (Settings (..))
-import Game.State (Enemy (..), GameState (..), Vec2 (..))
+import Game.State (Enemy (..), Focus (..), GameState (..), Vec2 (..))
 
 buildScene :: Settings -> Frame -> GameState -> Scene
 buildScene cfg frame st = Scene
@@ -27,23 +27,31 @@ buildScene cfg frame st = Scene
       [ Square (at (v2 st.playerPos) (worldH * frame.viewport.aspect + 4) (worldH + 4)) (hexColour cfg.backgroundColour)
       , DotGrid (realToFrac dotSpacing) (realToFrac dotRadius) (hexColour cfg.dotGridColour)
       , Square (at (v2 st.playerPos) (realToFrac playerSize) (realToFrac playerSize)) (hexColour cfg.playerColour)
-      ] <> concatMap (enemyNodes cfg) st.enemies
+      ] <> concatMap (enemyNodes cfg st.focus) st.enemies
   , sceneOverlay = []
   }
   where
     worldH = realToFrac cfg.worldHeight
 
 -- | An Enemy square in its Tier colour and its Word centred 'wordOffset'
--- below the Enemy's centre, in the default letter colour.
-enemyNodes :: Settings -> Enemy -> [Node]
-enemyNodes cfg e =
+-- below the Enemy's centre. Letters are default-coloured, except on the
+-- Focused Enemy: its first k are typed-coloured and, when Locked, letter k
+-- (the expected one) is Lock-coloured.
+enemyNodes :: Settings -> Focus -> Enemy -> [Node]
+enemyNodes cfg foc e =
   [ Square (at (v2 e.enemyPos) (realToFrac enemySize) (realToFrac enemySize)) (tierColour cfg e.enemyTier)
   , Text (Transform (V2 x (y - realToFrac wordOffset)) 0 (V2 1 1)) AnchorCentre (realToFrac wordCapHeight)
-      [ (c, letter) | c <- T.unpack e.enemyWord ]
+      [ (c, letterColour i) | (i, c) <- zip [0 ..] (T.unpack e.enemyWord) ]
   ]
   where
     V2 x y = v2 e.enemyPos
-    letter = hexColour cfg.letterDefaultColour
+    letterColour :: Int -> Colour
+    letterColour i = hexColour $ case foc of
+      Focused i' k | i' == e.enemyId, i < k -> cfg.letterTypedColour
+      Locked i' k
+        | i' == e.enemyId, i < k -> cfg.letterTypedColour
+        | i' == e.enemyId, i == k -> cfg.letterLockColour
+      _ -> cfg.letterDefaultColour
 
 v2 :: Vec2 -> V2
 v2 p = V2 (realToFrac p.vx) (realToFrac p.vy)

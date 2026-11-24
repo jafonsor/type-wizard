@@ -4,8 +4,20 @@
 -- and returns the next state. The random generator is a field, seeded by
 -- 'Start', so a fixed seed gives a fixed game.
 --
--- This slice holds spawning and movement only. 'Key' and 'Tab' are accepted
--- and ignored until typing is built.
+-- This slice holds spawning, movement and typing (spec section 4's table:
+-- Focus, Typo, Lock, Tab, Kill). Streak, Bonus and Points belong to the
+-- scoring slice, which hooks in at 'onTypo' and 'onKill'.
+--
+-- /Typing./ Input is handled only while the Phase is Running. Only a-z
+-- letters are Keystrokes ('Key' with anything else is ignored). The Focus is
+-- one of 'NoFocus' (the table's Idle), 'Focused' or 'Locked', each carrying
+-- the Enemy's id and the typed count k; a Tab or a Kill drops it (so the Word
+-- is back at k = 0 and every Word shows default letters).
+--
+-- /Counters./ @correctKeys@ and @wrongKeys@ feed 'accuracy'; the correct
+-- characters of 'wpm' are the correct Keystrokes (every correct Keystroke
+-- types one character of a Word). 'roundTime' is the sum of the clamped Tick
+-- steps, so a blur never counts as typing time.
 --
 -- /Spawn timing./ The wait before Enemy @k@ of a Tier (counting from 1) is
 -- measured from the previous spawn (from 'Start' for the first Enemy of the
@@ -22,6 +34,8 @@ module Game.State
   , Enemy (..)
   , GameState (..)
   , Rng (..)
+  , Focus (..)
+  , focusInfo
   , Input (..)
   , Seed
   , initialState
@@ -32,12 +46,20 @@ module Game.State
   , distanceToPlayer
   , spawnedIn
   , totalSpawned
+  , accuracy
+  , wpm
+  , correctChars
+  , focusedEnemy
   ) where
 
+import Control.Applicative ((<|>))
 import Data.IntMap.Strict (IntMap)
 import Data.IntMap.Strict qualified as IntMap
 import Data.Set qualified as Set
+import Data.List (minimumBy)
+import Data.Ord (comparing)
 import Data.Text (Text)
+import Data.Text qualified as T
 import Data.Word (Word64)
 import System.Random.SplitMix (SMGen, mkSMGen, nextDouble, unseedSMGen)
 
@@ -71,6 +93,21 @@ data Enemy = Enemy
   }
   deriving stock (Eq, Show)
 
+-- | Who is being typed (the table's Idle, Focused and Locked). k is the number
+-- of letters typed; the expected letter is Word index k.
+data Focus
+  = NoFocus
+  | Focused Int Int -- ^ Enemy id, k
+  | Locked Int Int -- ^ Enemy id, k (the letter expected next is Word index k)
+  deriving stock (Eq, Show)
+
+-- | The Enemy id and the typed count k, when there is a Focus.
+focusInfo :: Focus -> Maybe (Int, Int)
+focusInfo = \case
+  NoFocus -> Nothing
+  Focused i k -> Just (i, k)
+  Locked i k -> Just (i, k)
+
 data GameState = GameState
   { phase :: Phase
   , roundSettings :: Settings -- ^ snapshot taken at 'Start'
@@ -84,12 +121,19 @@ data GameState = GameState
   , playerPos :: Vec2 -- ^ the Player does not move
   , lastTime :: Maybe Double -- ^ the previous Tick's time; 'Nothing' until the first
   , viewAspect :: Double -- ^ width over height of the view, from 'Aspect'
+  , focus :: Focus
+  , correctKeys :: Int -- ^ correct Keystrokes this Round
+  , wrongKeys :: Int -- ^ Focused Typos plus wrong letters while Locked
+  , typos :: Int -- ^ Typos this Round (not the wrong letters while Locked)
+  , kills :: Int
+  , roundTime :: Double -- ^ seconds of Round time (sum of the clamped Tick steps)
+  , firstKeyAt :: Maybe Double -- ^ 'roundTime' at the first Keystroke
   }
   deriving stock (Eq, Show)
 
 data Input
-  = Key Char -- ^ accepted, ignored for now
-  | Tab -- ^ accepted, ignored for now
+  = Key Char -- ^ a lowercase a-z Keystroke (the JS shim filters; anything else is ignored)
+  | Tab -- ^ clears Focus and Lock
   | Tick Double -- ^ the frame time in seconds (the rAF clock)
   | Start Seed
   | Aspect Double
@@ -113,12 +157,21 @@ initialState = GameState
   , playerPos = Vec2 0 0
   , lastTime = Nothing
   , viewAspect = defaultAspect
+  , focus = NoFocus
+  , correctKeys = 0
+  , wrongKeys = 0
+  , typos = 0
+  , kills = 0
+  , roundTime = 0
+  , firstKeyAt = Nothing
   }
 
 step :: Settings -> Words -> Input -> GameState -> GameState
 step settings ws input st = case input of
   Start seed -> startRound settings seed st
   Tick now | st.phase == Running -> tick ws now st
+  Key c | st.phase == Running, c >= 'a' && c <= 'z' -> keystroke c st
+  Tab | st.phase == Running -> st { focus = NoFocus }
   Aspect a | a > 0 && not (isInfinite a) -> st { viewAspect = a }
   _ -> st
 
@@ -142,6 +195,7 @@ tick ws now st = spawnDue ws st'
       Just prev -> max 0 (min cfg.maxTickDt (now - prev))
     st' = st
       { lastTime = Just now
+      , roundTime = st.roundTime + dt
       , sinceSpawn = st.sinceSpawn + dt
       , enemies = map (advance cfg dt st.playerPos) st.enemies
       }
@@ -228,3 +282,91 @@ spawnedIn st tier = IntMap.findWithDefault 0 tier st.spawnCounts
 
 totalSpawned :: GameState -> Int
 totalSpawned = sum . IntMap.elems . (.spawnCounts)
+
+-- Typing ----------------------------------------------------------------------
+
+-- | The Enemy being typed, if any.
+focusedEnemy :: GameState -> Maybe Enemy
+focusedEnemy st = focusInfo st.focus >>= \(i, _) -> findEnemy i st
+
+findEnemy :: Int -> GameState -> Maybe Enemy
+findEnemy i st = case filter ((== i) . (.enemyId)) st.enemies of
+  e : _ -> Just e
+  [] -> Nothing
+
+-- | One a-z Keystroke, by the table of spec section 4.
+keystroke :: Char -> GameState -> GameState
+keystroke c st = case st.focus of
+  NoFocus -> case closestMatching c st of
+    Nothing -> st -- matches no Word: not a Keystroke, not a Typo
+    Just e -> advanceWord e 1 (correct st)
+  Focused i k -> withEnemy i \e ->
+    if expected e k == c then advanceWord e (k + 1) (correct st) else onTypo i k (wrong st)
+  Locked i k -> withEnemy i \e ->
+    if expected e k == c then advanceWord e (k + 1) (correct st) else wrong st
+  where
+    -- A Focus on an Enemy that is gone cannot happen (only a Kill removes an
+    -- Enemy, and it drops the Focus); if it ever did, drop it.
+    withEnemy i f = maybe st { focus = NoFocus } f (findEnemy i st)
+
+expected :: Enemy -> Int -> Char
+expected e k = T.index e.enemyWord k
+
+-- | The Enemy whose Word starts with the letter and whose centre is nearest
+-- the Player; a tie goes to the earlier spawn (the smaller id). Distances
+-- are compared to a millionth of a unit: parked Enemies sit at 'contactDistance'
+-- up to rounding, and that is a tie, not a win for whichever rounded lower.
+closestMatching :: Char -> GameState -> Maybe Enemy
+closestMatching c st = case filter ((== Just c) . fmap fst . T.uncons . (.enemyWord)) st.enemies of
+  [] -> Nothing
+  es -> Just (minimumBy (comparing (\e -> (round (distanceToPlayer st e * 1e6) :: Int, e.enemyId))) es)
+
+-- | k letters of the Enemy's Word are typed: at the Word's length it is a
+-- Kill, otherwise it is Focused.
+advanceWord :: Enemy -> Int -> GameState -> GameState
+advanceWord e k st
+  | k >= T.length e.enemyWord = onKill e st
+  | otherwise = st { focus = Focused e.enemyId k }
+
+-- | The Kill: the Enemy goes, the Focus drops. The scoring slice adds Streak,
+-- Bonus and Points here.
+onKill :: Enemy -> GameState -> GameState
+onKill e st = st
+  { enemies = filter ((/= e.enemyId) . (.enemyId)) st.enemies
+  , focus = NoFocus
+  , kills = st.kills + 1
+  }
+
+-- | A Typo at letter k of Enemy i: the Word locks, expecting the same letter.
+-- The scoring slice clears Streak, Bonus and the Streak Meter here.
+onTypo :: Int -> Int -> GameState -> GameState
+onTypo i k st = st { focus = Locked i k, typos = st.typos + 1 }
+
+correct, wrong :: GameState -> GameState
+correct st = (stamp st) { correctKeys = st.correctKeys + 1 }
+wrong st = (stamp st) { wrongKeys = st.wrongKeys + 1 }
+
+-- | Notes the Round time of the first Keystroke.
+stamp :: GameState -> GameState
+stamp st = st { firstKeyAt = st.firstKeyAt <|> Just st.roundTime }
+
+-- | Accuracy in percent: correct / (correct + wrong) Keystrokes, 100 when
+-- there are none.
+accuracy :: GameState -> Double
+accuracy st
+  | total == 0 = 100
+  | otherwise = 100 * fromIntegral st.correctKeys / fromIntegral total
+  where
+    total = st.correctKeys + st.wrongKeys
+
+-- | Correct characters typed: one per correct Keystroke.
+correctChars :: GameState -> Int
+correctChars = (.correctKeys)
+
+-- | Words per minute: (correct characters / 5) over the minutes from the
+-- first Keystroke to now (the last Tick; the Round-end slice freezes it at
+-- Round end). 0 before there is any time to divide by.
+wpm :: GameState -> Double
+wpm st = case st.firstKeyAt of
+  Just t0 | st.roundTime > t0 -> (fromIntegral (correctChars st) / 5) / ((st.roundTime - t0) / 60)
+  _ -> 0

@@ -8,6 +8,7 @@ import Game.Scene
 import Game.Settings (Settings (..), defaultSettings)
 import Game.State
 import StateTests (runTicks, testWords, tinyCfg)
+import TypingTests (enemyAt, keys, roundWith)
 
 frame :: Frame
 frame = Frame (Viewport 1600 900 (16 / 9)) 12.5
@@ -119,7 +120,53 @@ sceneTests = TestLabel "scene" $ TestList
       buildScene defaultSettings frame stateWithBothTiers
         @?= buildScene defaultSettings frame { time = 99 } stateWithBothTiers
 
+  , "letters: the first k of the Focused Word are typed-coloured, the rest default" ~:
+      assertEqual "colours" [typed, typed, deflt, deflt] (focusColours (keys "ca" fourLetters) 0)
+
+  , "letters: when Locked the expected letter is Lock-coloured, earlier ones typed, later default" ~:
+      assertEqual "colours" [typed, typed, lock, deflt] (focusColours (keys "cax" fourLetters) 0)
+
+  , "letters: a Locked Word at k = 1 shows letter 2 in the Lock colour" ~:
+      assertEqual "colours" [typed, lock, deflt, deflt] (focusColours (keys "cx" fourLetters) 0)
+
+  , "letters: only the Focused Enemy shows typed or Lock colours; others stay default" ~:
+      assertEqual "colours" [deflt, deflt, deflt, deflt] (focusColours (keys "cax" fourLetters) 1)
+
+  , "letters: with no Focus every letter is default; after Tab they return to default" ~: do
+      assertEqual "idle" [deflt, deflt, deflt, deflt] (focusColours fourLetters 0)
+      assertEqual "tab" [deflt, deflt, deflt, deflt] (focusColours (step tinyCfg testWords Tab (keys "cax" fourLetters)) 0)
+
+  , "letters: the three colours come from the settings and differ" ~: do
+      let cfg = defaultSettings { letterDefaultColour = "#010101", letterTypedColour = "#020202", letterLockColour = "#030303" }
+          st = (keys "cax" fourLetters) { roundSettings = cfg }
+          cols = case drop 3 (sceneOf cfg st).sceneWorld of
+            _ : t : _ | Just (_, _, _, _, cs) <- textOf t -> cs
+            _ -> []
+      cols @?= map hexColour ["#020202", "#020202", "#030303", "#010101"]
+      assertBool "the defaults differ" (deflt /= typed && typed /= lock && deflt /= lock)
+
+  , "a Killed Enemy is no longer drawn" ~: do
+      let st = keys "cats" fourLetters
+      length (enemyPairs (sceneOf defaultSettings st)) @?= 1
+
   , "hexColour reads #rrggbb and shows a bad value as magenta" ~: do
       hexColour "#ff8000" @?= Colour 1 (128 / 255) 0 1
       hexColour "nope" @?= Colour 1 0 1 1
   ]
+
+-- Typing colours ------------------------------------------------------------
+
+deflt, typed, lock :: Colour
+deflt = hexColour "#e6e6e6"
+typed = hexColour "#6fe08a"
+lock = hexColour "#ff5c5c"
+
+-- | Two Enemies (ids 0 and 1) with four-letter Words "cats" and "dust".
+fourLetters :: GameState
+fourLetters = roundWith [enemyAt 0 (6, 0) "cats", enemyAt 1 (0, 9) "dust"]
+
+-- | The letter colours of the Word of Enemy number i (by spawn order).
+focusColours :: GameState -> Int -> [Colour]
+focusColours st i = case drop i (enemyPairs (sceneOf defaultSettings st)) of
+  (_, t) : _ | Just (_, _, _, _, cs) <- textOf t -> cs
+  _ -> []

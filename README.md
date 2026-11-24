@@ -4,7 +4,7 @@ A top-down typing game in Haskell compiled to wasm (reflex-dom, Obelisk v2). The
 
 ## Layout
 
-- `common`: shared code (`Common.Route`) and the pure game modules (`Game.Settings`, `Game.Save`, `Game.Words`, `Game.State`, `Game.Layout`, `Game.Scene`, `Game.Debug`), with a test-suite. `Game.Scene` imports the renderer's types, so `common` depends on `renderer`; `Game.State` and `Game.Words` do not.
+- `common`: shared code (`Common.Route`) and the pure game modules (`Game.Settings`, `Game.Save`, `Game.Words`, `Game.State`, `Game.Layout`, `Game.Scene`, `Game.Debug`), with a test-suite (`StateTests` for spawning, `TypingTests` for the typing table, `SceneTests`). `Game.Scene` imports the renderer's types, so `common` depends on `renderer`; `Game.State` and `Game.Words` do not.
 - `renderer`: the 2D renderer library (`Renderer` is the whole interface; `Renderer.Internal` is the pure layer, exposed for its tests), with a test-suite. Its JS executor is `static/src/js/renderer.js`.
 - `frontend`: the browser app (`Frontend`, `Frontend.Page`, `Frontend.Game`, `Frontend.Storage`, `Frontend.Words`, `Frontend.Bench`). `frontend/wasm` and `frontend/js` are Obelisk wrapper packages that cross-compile it.
 - `backend`: a stub that serves the page and its files. No game logic.
@@ -38,7 +38,7 @@ In the dev shell, `ob-run` (or `cabal build`) works for quick native iteration; 
 
 ## Tests
 
-The pure tests (`common/test` and `renderer/test`, HUnit) run as flake checks (`common-test` covers settings, save, words, `step` and `buildScene`; `renderer-test` the renderer's pure layer):
+The pure tests (`common/test` and `renderer/test`, HUnit) run as flake checks (`common-test` covers settings, save, words, `step` (spawning and the typing table) and `buildScene`; `renderer-test` the renderer's pure layer):
 
 ```
 nix build .#checks.aarch64-darwin.common-test --cores 4 -L    # use your own system in place of aarch64-darwin
@@ -88,9 +88,15 @@ Results of the run for ticket 15 are in `.scratch/type-wizard/issues/15-renderer
 
 `Frontend.Game.gameCanvas` (per visit to the Game page): the render pull, run by JS's rAF once per frame, fires one `Tick` (the Frame time) and, when the viewport aspect changed, an `Aspect`; entering the page fires `Start seed` (seed from `Date.now()` and `performance.now()`). `mergeWith` joins the inputs into one event, `foldDyn` runs `Game.State.step` over them with the current Settings (read at `Start`, snapshotted in `GameState.roundSettings`), and `performEvent_` on `updated gameState` is the only writer of an `IORef (Maybe GameState)`. The pull peeks that cell (`Nothing` before the first state, then a fresh `buildScene` every frame). Never an `MVar`.
 
-`step` so far: Start, Tick (spawn along the per-Tier ramp, move, park at 1.1), Aspect; `Key` and `Tab` are ignored. Words: one shuffled bag per Tier (`Game.Words`); a spawn is deferred when every Word of the Tier's length is on screen.
+`step` so far: Start, Tick (spawn along the per-Tier ramp, move, park at 1.1), Aspect, and typing (`Key c`, `Tab`; see "Typing"). Words: one shuffled bag per Tier (`Game.Words`); a spawn is deferred when every Word of the Tier's length is on screen.
 
-Dev hook: open the Game page with `?hook` (for example `http://localhost:8765/type-wizard/?hook`) and read `window.TypeWizardGame.state()` for a JSON summary of the state (phase, tier, spawned counts, Enemies with word, tier, x, y, distance). Without `?hook` nothing is written. To make a quick run set `localStorage['typewizard.settings']` (for example `{"version":1,"intervalStart":0.6,"intervalEnd":0.6,"enemySpeed":5,"enemiesPerTier":10,"lastTier":4}`) before the page loads.
+Dev hook: open the Game page with `?hook` (for example `http://localhost:8765/type-wizard/?hook`) and read `window.TypeWizardGame.state()` for a JSON summary of the state (phase, tier, spawned counts, Enemies with word, tier, x, y, distance, and for typing: `focus` (`{enemy, k}` or `null`), `locked`, `correct`, `wrong`, `typos`, `kills`, `accuracy` in percent, `wpm`). Without `?hook` nothing is written. To make a quick run set `localStorage['typewizard.settings']` (for example `{"version":1,"intervalStart":0.6,"intervalEnd":0.6,"enemySpeed":5,"enemiesPerTier":10,"lastTier":4}`) before the page loads.
+
+### Typing
+
+Spec section 4's table is `Game.State.step`'s `Key` and `Tab` rows, tested row by row in `common/test/TypingTests.hs`. The state holds `focus :: Focus` (`NoFocus`, `Focused enemyId k`, `Locked enemyId k`) and counters `correctKeys`, `wrongKeys` (Focused Typos plus wrong letters while Locked), `typos`, `kills`, `roundTime` (sum of the clamped Tick steps) and `firstKeyAt`. `accuracy` is a percentage (100 with no Keystrokes); `wpm` is (correct characters / 5) over the minutes of `roundTime` from the first Keystroke (correct or wrong) to now, and 0 before any time has passed. A Typo calls `onTypo` and a Kill `onKill`: the scoring slice adds Streak, Bonus and Points there. Only a-z `Key`s count; keys are ignored unless Phase is Running. The closest Enemy is chosen by distance compared to a millionth of a unit (parked Enemies are equal up to rounding, so that is a tie that goes to the earlier spawn).
+
+The key shim is `static/src/js/keys.js` (`window.TypeWizardKeys.attach(canvas, callback)`, loaded in the page head; `Frontend.Game` calls it with a jsaddle `function` that fires one `Key c` or `Tab` through `newTriggerEvent`). It listens to `keydown` on `window` (capture phase) only while the canvas is connected and removes itself when it is not (checked on each key and once per frame), so Start and Settings keys, Tab navigation included, are untouched. It calls `preventDefault` for Tab itself, ignores `event.repeat`, and reports `a-z` / `A-Z` as lowercase. A key with Ctrl, Meta or Alt is ignored and left to the browser (so Ctrl+Tab, Ctrl+C and the like still work); Shift is fine. `TypeWizardKeys.stats` (`attached`, `detached`, `sent`, `active`) is for the browser check. Escape and the Menu key are the Round-flow ticket's.
 
 ### Measuring the JS boundary (dev only)
 

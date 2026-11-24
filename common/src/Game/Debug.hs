@@ -6,7 +6,7 @@ module Game.Debug
   , stateSummaryText
   ) where
 
-import Data.Aeson (Value, encode, object, (.=))
+import Data.Aeson (Value (Null), encode, object, (.=))
 import Data.Aeson.Key qualified as Key
 import Data.ByteString.Lazy qualified as LBS
 import Data.IntMap.Strict qualified as IntMap
@@ -24,6 +24,16 @@ stateSummary st = object
   , "enemyCount" .= length st.enemies
   , "aspect" .= st.viewAspect
   , "player" .= object ["x" .= st.playerPos.vx, "y" .= st.playerPos.vy]
+  , "focus" .= case focusInfo st.focus of
+      Nothing -> Null
+      Just (i, k) -> object ["enemy" .= i, "k" .= k]
+  , "locked" .= case st.focus of { Locked {} -> True; _ -> False }
+  , "correct" .= st.correctKeys
+  , "wrong" .= st.wrongKeys
+  , "typos" .= st.typos
+  , "kills" .= st.kills
+  , "accuracy" .= accuracy st
+  , "wpm" .= wpm st
   , "enemies" .=
       [ object
           [ "id" .= e.enemyId, "word" .= e.enemyWord, "tier" .= e.enemyTier

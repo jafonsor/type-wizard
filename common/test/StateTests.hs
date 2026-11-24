@@ -96,11 +96,6 @@ startTests = TestLabel "start" $ TestList
       again.lastTime @?= Nothing
       again.viewAspect @?= 2
 
-  , "Key and Tab are accepted and ignored" ~: do
-      let st = runTicks tinyCfg testWords 1 0.05 100
-      step tinyCfg testWords (Key 'a') st @?= st
-      step tinyCfg testWords Tab st @?= st
-
   , "a bad aspect is ignored" ~: do
       let st = step tinyCfg testWords (Start 1) initialState
       (step tinyCfg testWords (Aspect 0) st).viewAspect @?= st.viewAspect
