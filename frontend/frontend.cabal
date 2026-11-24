@@ -184,6 +184,8 @@ library
 
     -- Modules exported by the library.
     exposed-modules:  Frontend
+                      Frontend.Bench
+                      Frontend.Game
                       Frontend.Page
                       Frontend.Storage
                       Frontend.Words
@@ -208,9 +210,13 @@ library
                     , obelisk-route
                     , reflex-dom
                     , reflex-dom-core
+                    , renderer
                     , text
 
     -- Directories containing source files.
+    if arch(wasm32)
+      build-depends:  ghc-experimental
+
     hs-source-dirs:   src
 
 executable frontend

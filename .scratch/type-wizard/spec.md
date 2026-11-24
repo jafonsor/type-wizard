@@ -273,9 +273,9 @@ Earlier tickets disagreed or left a gap. The choices below are this spec's; over
 These were left in the fog on purpose; none changes a decision above.
 
 - **Build, dev loop and deploy:** copy the Obelisk v2 and wasm setup from `type-solution`; the static GitHub Pages deploy and its sub-path base. A bootstrap task is likely the first implementation ticket.
-- **JS boundary cost:** per-call cost is unmeasured (research and spike both left it). Slice 3 below includes a quick measurement, since the one-call-per-frame design only needs it to be small.
+- **JS boundary cost:** measured in ticket 15 (headless Chrome, Apple M1 Max, release wasm build, `?bench`). A trivial `unsafe` JS FFI call from Haskell costs about 0.17 us (100,000 in 17 ms); a JS call into a Haskell `wrapper sync` callback about 1.3 us (100,000 in 130 to 138 ms); queued jsaddle calls about 2.2 us each (1,000 in 2.2 ms, results not awaited, so not a round trip). The whole per-frame renderer callback (pull, flatten of about 270 instances, pack, the one draw call and the GL work) is 0.63 ms per frame at 60 fps, 4% of the frame. The one-call-per-frame design is cheap; the numbers and method are in the ticket's Answer and `README.md`.
 - **Browser shortcuts other than Tab:** key capture handles Tab; whether Ctrl/Cmd combos, `/` or `'` quick-find need handling is to be checked in the browser. The default is to ignore any key press with a modifier, which also avoids counting shortcuts as Keystrokes.
-- **JS-side checks:** the renderer's JS executor has no automated test; a manual browser checklist (resize, DPR change, canvas detach stops the loop, WebGL-unavailable message) belongs with the renderer slice.
+- **JS-side checks:** the renderer's JS executor has no automated test; the manual browser checklist (resize, DPR change, canvas detach stops the loop, WebGL-unavailable message) is in `README.md` ("Renderer") and was run in ticket 15.
 - **Browser read-back of the embed:** the spike proved the embedded bytes are in the wasm; reading the line count in a running page is confirmed by the Words slice.
 
 ## 16. Suggested slicing

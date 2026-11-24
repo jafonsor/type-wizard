@@ -24,6 +24,8 @@ frontendHead = do
   elAttr "link" ("rel" =: "stylesheet" <> "href" =: static @"css/app.css") blank
   -- The localStorage shim (Frontend.Storage), loaded before the app starts.
   elAttr "script" ("src" =: static @"js/storage.js") blank
+  -- The renderer's JS executor (the renderer package), also loaded first.
+  elAttr "script" ("src" =: static @"js/renderer.js") blank
 
 frontendBody :: ObeliskWidget t (R FrontendRoute) m => RoutedT t (R FrontendRoute) m ()
 frontendBody = elClass "main" "app" pageSwitch

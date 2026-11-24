@@ -1,5 +1,6 @@
 packages:
   common
+  renderer
   frontend
 
 optional-packages:

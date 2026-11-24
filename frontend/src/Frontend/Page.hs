@@ -16,6 +16,7 @@ import Language.Javascript.JSaddle (liftJSM)
 import Reflex.Dom.Core
 import Text.Read (readMaybe)
 
+import Frontend.Game (gameCanvas)
 import Frontend.Storage (loadSave, loadSettings, storeSave, storeSettings)
 import Frontend.Words (allWords)
 import Game.Save (Save (..), emptySave)
@@ -58,7 +59,7 @@ pageSwitch = mdo
     performEvent_ (liftJSM . storeSave <$> updated save)
 
 pageWidget
-  :: (DomBuilder t m, PostBuild t m, MonadHold t m, MonadFix m)
+  :: (DomBuilder t m, PostBuild t m, MonadHold t m, MonadFix m, Prerender t m)
   => Dynamic t S.Settings -> Dynamic t Save -> Page -> m (PageOut t)
 pageWidget settings save = \case
   Start -> section "start" "Start" do
@@ -71,6 +72,7 @@ pageWidget settings save = \case
     pure $ pageOnly $ leftmost [Game <$ play, Settings <$ settingsB]
   Game -> section "game" "Game" do
     menu <- button "Menu"
+    gameCanvas settings
     pure $ pageOnly $ Start <$ menu
   Settings -> section "settings" "Settings" do
     back <- button "Back"
