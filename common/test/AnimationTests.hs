@@ -335,11 +335,11 @@ roundEndRows = TestLabel "round end" $ TestList
       assertBool "signs on show when the Round ends" (length (signs (animNodes cfg tOver over)) == 2)
       -- later Ticks change nothing but the records
       let later = step cfg testWords (Tick (tOver + 0.5)) over
-      later { killAnims = [] } @?= over { killAnims = [] }
+      later { killAnims = [], hitAt = Nothing } @?= over { killAnims = [], hitAt = Nothing }
       length later.killAnims @?= 1
       let done = step cfg testWords (Tick (killAnimEnd k)) over
       done.killAnims @?= []
-      done { killAnims = over.killAnims } @?= over
+      done { killAnims = over.killAnims, hitAt = over.hitAt } @?= over
       signs (animNodes cfg (killAnimEnd k) over) @?= []
 
   , "a record keeps finishing in Over after the Summary shows: lastTime is not advanced by Over Ticks" ~: do

@@ -96,6 +96,27 @@
 -- resets the Camera to rest on the Player. The spawn ring does not read the
 -- Camera.
 --
+-- /Hit and Streak feedback./ Two more start-time records on the same clock
+-- ('lastTime'). 'hitAt' is the Tick clock of the latest Hit (the Tick that
+-- noticed it, so a re-Hit at the scheduled Grace end is up to one frame late;
+-- the fatal Hit sets it too). The builder evaluates 'playerAlphaAt' (blink:
+-- full for 'blinkPeriod', dim for 'blinkPeriod', ..., full first, only while
+-- 'graceActive' so it stops with the Grace Period, at Round end and in
+-- 'Over'; while paused the Grace is frozen so the blink goes on) and
+-- 'hitFlashAt' (0.3 at the Hit, linear to 0 over 'hitFlashTime', which
+-- finishes behind the Summary). 'meterAnim' is one 'MeterAnim' record (the
+-- latest Kill or Typo event; 'Nothing' at rest, where the meter is the static
+-- 'meterFill' of the Streak). Its 'maFrom' is the 'MeterView' /displayed/ at
+-- the event ('meterViewAt' at 'lastTime'), so back-to-back events continue
+-- from what was on screen: Kill after Kill grows from the shown fill to the
+-- new fill; any event during a group-completion flash or emptying starts from
+-- the shown fill (the white drops); a Typo fades the label from its shown
+-- scale and alpha. A Grow keeps a pop in progress, finishing it at the pop's
+-- own speed. 'expire' drops 'hitAt' once its Grace and flash are over and
+-- 'meterAnim' once it ends, so neither grows. 'groupCompletedAt' stays the
+-- 'roundTime' record of the completing Kill; the builder uses the raw-clock
+-- 'MeterKind' 'MeterComplete' record instead.
+--
 -- /Order inside a Tick./ Existing Enemies move first, then due Enemies spawn
 -- at the ring, so an Enemy is on the ring exactly in the Tick it appears.
 module Game.State
@@ -136,6 +157,15 @@ module Game.State
   , cameraCentreAt
   , cameraNow
   , restingCamera
+    -- * Hit and Streak feedback
+  , MeterKind (..)
+  , MeterView (..)
+  , LabelView (..)
+  , MeterAnim (..)
+  , meterViewAt
+  , meterAnimEnd
+  , playerAlphaAt
+  , hitFlashAt
     -- * Scoring
   , streakBonus
   , meterFill
@@ -156,11 +186,14 @@ import Data.Ord (comparing)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Bits (xor)
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, isNothing)
 import Data.Word (Word64)
 import System.Random.SplitMix (SMGen, mkSMGen, nextDouble, unseedSMGen)
 
-import Game.Layout (contactDistance, defaultAspect, plusMaxDelay)
+import Game.Layout
+  ( blinkDimAlpha, blinkPeriod, contactDistance, defaultAspect, hitFlashAlpha, hitFlashTime
+  , labelPopScale, labelPopTime, meterEmptyTime, meterFlashTime, meterGrowTime, plusMaxDelay
+  , typoFadeTime )
 import Game.Save (Save)
 import Game.Save qualified as Save
 import Game.Settings (Settings (..), defaultSettings)
@@ -243,6 +276,11 @@ data GameState = GameState
   , roundResult :: Maybe RoundResult -- ^ set when the Round ends ('Over')
   , killAnims :: [KillAnim] -- ^ the Shots and Plus Signs in flight, oldest first
   , camera :: CameraAnim -- ^ the Camera's current easing record
+  , hitAt :: Maybe Double
+    -- ^ the Tick clock at the latest Hit (start-time record of the Hit feedback:
+    -- the Player's blink and the red flash are evaluated from it)
+  , meterAnim :: Maybe MeterAnim
+    -- ^ the Streak Meter's current animation record (see /Hit and Streak feedback/)
   , animRng :: Rng
     -- ^ the generator for the Plus Signs' random parameters, derived from the
     -- Round's seed; separate from 'rng' so animations never change the Words
@@ -365,6 +403,8 @@ initialState = GameState
   , roundResult = Nothing
   , killAnims = []
   , camera = restingCamera defaultSettings.cameraTimeConstant (Vec2 0 0)
+  , hitAt = Nothing
+  , meterAnim = Nothing
   , animRng = Rng (mkSMGen 0)
   }
 
@@ -482,7 +522,15 @@ retarget old new
 
 -- | Drops the records that are over at this Tick's timestamp.
 expire :: Double -> GameState -> GameState
-expire now st = st { killAnims = filter ((> now) . killAnimEnd) st.killAnims }
+expire now st = st
+  { killAnims = filter ((> now) . killAnimEnd) st.killAnims
+  , hitAt = case st.hitAt of
+      Just h | graceActive st || now < h + hitFlashTime -> Just h
+      _ -> Nothing
+  , meterAnim = case st.meterAnim of
+      Just a | now < meterAnimEnd a -> Just a
+      _ -> Nothing
+  }
 
 -- | A 'Key', 'Tab' or 'Click' while paused: resumes if the window has its focus
 -- back; either way the input is swallowed (never a Keystroke).
@@ -538,8 +586,8 @@ resolveHit st = case st.graceStart of
 hitIfTouching :: Double -> GameState -> GameState
 hitIfTouching startAt st
   | not (any (touching st) st.enemies) = st
-  | st.lives <= 1 = endRound st { lives = 0 }
-  | otherwise = st { lives = st.lives - 1, graceStart = Just startAt }
+  | st.lives <= 1 = endRound st { lives = 0, hitAt = st.lastTime }
+  | otherwise = st { lives = st.lives - 1, graceStart = Just startAt, hitAt = st.lastTime }
 
 -- | Lives are 0: Over. Focus and Lock drop, the Enemies are discarded with no
 -- Points, the Round Points are banked into 'totalPoints' and the result is kept.
@@ -719,8 +767,15 @@ onKill e st = st
   , groupCompletedAt = if streak' `mod` size == 0 then Just st.roundTime else st.groupCompletedAt
   , killAnims = st.killAnims <> [anim]
   , animRng = Rng g'
+  , meterAnim = Just MeterAnim
+      { maStart = t0
+      , maKind = if streak' `mod` size == 0 then MeterComplete else MeterGrow
+      , maFrom = meterViewAt st t0
+      , maStreak = streak'
+      }
   }
   where
+    t0 = fromMaybe 0 st.lastTime
     size = groupSize st
     streak' = st.streak + 1
     points = 1 + streak' `div` size
@@ -764,7 +819,123 @@ onTypo i k st = st
   , streak = 0
   , runKills = 0
   , groupCompletedAt = Nothing
+  , meterAnim = if shown.mvFill <= 0 && not shown.mvWhite && isNothing shown.mvLabel
+      then Nothing
+      else Just MeterAnim { maStart = t0, maKind = MeterTypo, maFrom = shown, maStreak = 0 }
   }
+  where
+    t0 = fromMaybe 0 st.lastTime
+    shown = meterViewAt st t0
+
+-- Hit and Streak feedback ------------------------------------------------------
+
+-- | What a 'MeterAnim' does.
+data MeterKind
+  = MeterGrow -- ^ a Kill: the fill moves to the new fill over 'meterGrowTime'
+  | MeterComplete -- ^ a group-completing Kill: full and white, then empties; the label pops
+  | MeterTypo -- ^ a Typo: the bar empties and the label fades over 'typoFadeTime'
+  deriving stock (Eq, Show)
+
+-- | The "+N" label as drawn: its Bonus, scale (1 at rest) and alpha (1 at rest).
+data LabelView = LabelView { lvBonus :: Int, lvScale :: Double, lvAlpha :: Double }
+  deriving stock (Eq, Show)
+
+-- | The Streak Meter as drawn at one time: the fill (0 to 1; 1 only during a
+-- completion's flash and the start of its emptying), whether the bar is white,
+-- the Streak whose 'Game.Scene.shotColour' colours it, and the label (hidden
+-- at Bonus 0).
+data MeterView = MeterView
+  { mvFill :: Double
+  , mvWhite :: Bool
+  , mvStreak :: Int
+  , mvLabel :: Maybe LabelView
+  }
+  deriving stock (Eq, Show)
+
+-- | The meter's animation record: the event, its time, the view shown at that
+-- moment, and the Streak after it.
+data MeterAnim = MeterAnim
+  { maStart :: Double
+  , maKind :: MeterKind
+  , maFrom :: MeterView
+  , maStreak :: Int
+  }
+  deriving stock (Eq, Show)
+
+-- | The meter at rest: the static view of the state's Streak.
+restView :: GameState -> MeterView
+restView st = MeterView
+  { mvFill = meterFill st
+  , mvWhite = False
+  , mvStreak = st.streak
+  , mvLabel = if streakBonus st >= 1 then Just (LabelView (streakBonus st) 1 1) else Nothing
+  }
+
+-- | How long a Grow keeps going: the fill, or a pop it inherited, whichever is longer.
+meterAnimEnd :: MeterAnim -> Double
+meterAnimEnd a = a.maStart + case a.maKind of
+  MeterGrow -> max meterGrowTime (popRemaining a.maFrom)
+  MeterComplete -> max labelPopTime (meterFlashTime + meterEmptyTime)
+  MeterTypo -> typoFadeTime
+
+-- | Time for a label at its shown scale to settle to 1 at the pop's own speed.
+popRemaining :: MeterView -> Double
+popRemaining v = case v.mvLabel of
+  Just l -> max 0 (l.lvScale - 1) * labelPopTime / (labelPopScale - 1)
+  Nothing -> 0
+
+-- | The meter evaluated at time t (the builder's clock, 'lastTime' base): the
+-- record's animation, or the rest view when there is none or it is over. All
+-- ramps are linear.
+meterViewAt :: GameState -> Double -> MeterView
+meterViewAt st t = case st.meterAnim of
+  Just a | t < meterAnimEnd a -> animView st a (max 0 (t - a.maStart))
+  _ -> restView st
+
+animView :: GameState -> MeterAnim -> Double -> MeterView
+animView st a u = case a.maKind of
+  MeterGrow -> MeterView
+    { mvFill = a.maFrom.mvFill + (target - a.maFrom.mvFill) * ramp meterGrowTime
+    , mvWhite = False
+    , mvStreak = a.maStreak
+    , mvLabel = if bonus >= 1
+        then Just (LabelView bonus (max 1 (maybe 1 (.lvScale) a.maFrom.mvLabel - u * (labelPopScale - 1) / labelPopTime)) 1)
+        else Nothing
+    }
+  MeterComplete -> MeterView
+    { mvFill = if u < meterFlashTime then 1 else 1 - clamp01' ((u - meterFlashTime) / meterEmptyTime)
+    , mvWhite = u < meterFlashTime
+    , mvStreak = a.maStreak
+    , mvLabel = Just (LabelView bonus (labelPopScale + (1 - labelPopScale) * ramp labelPopTime) 1)
+    }
+  MeterTypo -> MeterView
+    { mvFill = a.maFrom.mvFill * (1 - ramp typoFadeTime)
+    , mvWhite = False
+    , mvStreak = a.maFrom.mvStreak
+    , mvLabel = fmap (\l -> l { lvAlpha = l.lvAlpha * (1 - ramp typoFadeTime) }) a.maFrom.mvLabel
+    }
+  where
+    size = groupSize st
+    bonus = a.maStreak `div` size
+    target = fromIntegral (a.maStreak `mod` size) / fromIntegral size
+    ramp d = clamp01' (u / d)
+
+clamp01' :: Double -> Double
+clamp01' = max 0 . min 1
+
+-- | The Player's opacity at time t: 'blinkDimAlpha' on the odd 'blinkPeriod's
+-- after the latest Hit while the Grace Period lasts, else 1.
+playerAlphaAt :: GameState -> Double -> Double
+playerAlphaAt st t = case st.hitAt of
+  Just h | graceActive st, t >= h, odd (floor ((t - h) / blinkPeriod) :: Int) -> blinkDimAlpha
+  _ -> 1
+
+-- | The red full-screen overlay's alpha at time t: 'hitFlashAlpha' at the
+-- latest Hit, linear to 0 over 'hitFlashTime', 0 before and after.
+hitFlashAt :: GameState -> Double -> Double
+hitFlashAt st t = case st.hitAt of
+  Just h | t >= h, t < h + hitFlashTime -> hitFlashAlpha * (1 - (t - h) / hitFlashTime)
+  _ -> 0
 
 -- | The Round's group size (at least 1, so a hand-made state cannot divide by 0).
 groupSize :: GameState -> Int

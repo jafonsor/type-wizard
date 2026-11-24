@@ -13,15 +13,18 @@
 -- 'Group' at the Player: the Streak Meter (a dim track and a fill, in the
 -- 'shotColour' of the Streak, @(Streak mod group) / group@ of the track wide,
 -- left-aligned; no fill node at 0) and, from Bonus 1, the "+N" label. These
--- are static: the grow, flash and pop animations belong to a later slice.
+-- are animated from the state's records at @Frame.time@ (see "Game.State",
+-- /Hit and Streak feedback/): the fill grows, flashes white and empties, the
+-- label pops or fades.
 --
 -- /HUD./ The overlay (screen-fixed, in world-height units): top-right
 -- "Points N" (this Round) and "Total N" (Total Points) as two lines,
 -- bottom-centre "Streak N". Top-left is the Lives row: one 0.4 square per
 -- starting Life, white while kept and dim (the meter track's grey) once lost.
 -- Bottom-left is the small "Esc: menu" hint. (The DOM Menu control is at the
--- top-centre, so nothing overlaps the Lives.) The Hit feedback animations
--- belong to a later slice.
+-- top-centre, so nothing overlaps the Lives.) After the HUD, last (on top),
+-- comes the red Hit overlay (only while its alpha is above 0). The Player's
+-- colour carries the blink's alpha.
 module Game.Scene
   ( buildScene
   , shotColour
@@ -37,8 +40,8 @@ import Renderer
 import Game.Layout
 import Game.Settings (Settings (..))
 import Game.State
-  ( Enemy (..), Focus (..), GameState (..), KillAnim (..), PlusSign (..), Vec2 (..)
-  , cameraCentreAt, meterFill, shotArrival, signEnd, signFlyStart, streakBonus )
+  ( Enemy (..), Focus (..), GameState (..), KillAnim (..), LabelView (..), MeterView (..), PlusSign (..), Vec2 (..)
+  , cameraCentreAt, hitFlashAt, meterViewAt, playerAlphaAt, shotArrival, signEnd, signFlyStart )
 
 buildScene :: Settings -> Frame -> GameState -> Scene
 buildScene cfg frame st = Scene
@@ -46,13 +49,15 @@ buildScene cfg frame st = Scene
   , sceneWorld =
       [ Square (at centre (worldH * frame.viewport.aspect + 4) (worldH + 4)) (hexColour cfg.backgroundColour)
       , DotGrid (realToFrac dotSpacing) (realToFrac dotRadius) (hexColour cfg.dotGridColour)
-      , Square (at (v2 st.playerPos) (realToFrac playerSize) (realToFrac playerSize)) (hexColour cfg.playerColour)
-      , meterNodes cfg st
+      , Square (at (v2 st.playerPos) (realToFrac playerSize) (realToFrac playerSize)) playerCol
+      , meterNodes cfg frame.time st
       ] <> concatMap (enemyNodes cfg st.focus) st.enemies
         <> concatMap (killNodes cfg frame.time) st.killAnims
-  , sceneOverlay = hudNodes cfg frame st
+  , sceneOverlay = hudNodes cfg frame st <> hitFlashNodes cfg frame st
   }
   where
+    Colour pr pg pb _ = hexColour cfg.playerColour
+    playerCol = Colour pr pg pb (realToFrac (playerAlphaAt st frame.time))
     worldH = realToFrac cfg.worldHeight
     centre = v2 (cameraCentreAt frame.time st.camera)
 
@@ -109,19 +114,36 @@ lerpV :: V2 -> V2 -> Float -> V2
 lerpV (V2 ax ay) (V2 bx bY) f = V2 (ax + (bx - ax) * f) (ay + (bY - ay) * f)
 
 -- | The Streak Meter and the Bonus label, one 'Group' at the Player.
-meterNodes :: Settings -> GameState -> Node
-meterNodes cfg st = Group (at (v2 st.playerPos) 1 1) (track : fill <> label)
+--
+-- Everything is the 'MeterView' at the frame time ('meterViewAt'): the fill's
+-- width, white during a completion's flash, the label's scale (the Text
+-- transform's scale, about its left anchor) and alpha (in its colours).
+meterNodes :: Settings -> Double -> GameState -> Node
+meterNodes cfg t st = Group (at (v2 st.playerPos) 1 1) (track : fill <> label)
   where
+    view = meterViewAt st t
     (mw, mh) = (realToFrac (fst meterSize), realToFrac (snd meterSize))
     y = realToFrac meterOffset
-    c = shotColour cfg st.streak
-    w = mw * realToFrac (meterFill st)
+    c = if view.mvWhite then Colour 1 1 1 1 else shotColour cfg view.mvStreak
+    w = mw * realToFrac view.mvFill
     track = Square (at (V2 0 y) mw mh) trackColour
     fill = [ Square (at (V2 (negate mw / 2 + w / 2) y) w mh) c | w > 0 ]
     label =
-      [ Text (Transform (V2 (realToFrac bonusLabelOffset) y) 0 (V2 1 1)) AnchorLeft (realToFrac bonusLabelHeight)
-          [ (ch, c) | ch <- '+' : show (streakBonus st) ]
-      | streakBonus st >= 1 ]
+      [ Text (Transform (V2 (realToFrac bonusLabelOffset) y) 0 (V2 s s)) AnchorLeft (realToFrac bonusLabelHeight)
+          [ (ch, Colour lr lg lb (realToFrac l.lvAlpha)) | ch <- '+' : show l.lvBonus ]
+      | Just l <- [view.mvLabel]
+      , let s = realToFrac l.lvScale
+            Colour lr lg lb _ = shotColour cfg view.mvStreak ]
+
+-- | The red full-screen Hit overlay: a screen-fixed square, red at the
+-- evaluated alpha, larger than the view (world height and aspect, plus a
+-- margin) so it always covers; nothing when the alpha is 0.
+hitFlashNodes :: Settings -> Frame -> GameState -> [Node]
+hitFlashNodes cfg frame st =
+  [ Square (at (V2 0 0) (h * frame.viewport.aspect + 2) (h + 2)) (Colour 1 0 0 (realToFrac a)) | a > 0 ]
+  where
+    h = realToFrac cfg.worldHeight
+    a = hitFlashAt st frame.time
 
 -- | The dim colour of the meter's track (the dot-grid grey, spec section 9).
 trackColour :: Colour

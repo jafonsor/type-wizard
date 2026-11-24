@@ -189,7 +189,7 @@ overRows = TestLabel "over" $ TestList
       over.phase @?= Over
       let later = foldl' (flip (press c)) over ([Tick 101, Tick 105, Tick 150] <> map Key "cdogxyz" <> [Tab, Blur, Click, Focus])
       -- Blur, Focus and Aspect are not Round input either way
-      (later { windowFocused = over.windowFocused }) @?= over
+      (later { windowFocused = over.windowFocused, hitAt = over.hitAt }) @?= over -- the Hit flash record expires on Ticks
       later.enemies @?= []
       totalSpawned later @?= totalSpawned over
       (later.correctKeys, later.wrongKeys, later.roundTime) @?= (over.correctKeys, over.wrongKeys, over.roundTime)

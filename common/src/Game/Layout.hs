@@ -27,6 +27,16 @@ module Game.Layout
   , plusMaxDelay
   , plusShrinkTime
   , plusShrinkScale
+  , blinkPeriod
+  , blinkDimAlpha
+  , hitFlashAlpha
+  , hitFlashTime
+  , meterGrowTime
+  , meterFlashTime
+  , meterEmptyTime
+  , labelPopTime
+  , labelPopScale
+  , typoFadeTime
   ) where
 
 -- | The Player is a square of this side.
@@ -110,3 +120,26 @@ plusMaxDelay = 0.15
 plusShrinkTime, plusShrinkScale :: Double
 plusShrinkTime = 0.15
 plusShrinkScale = 0.3
+
+-- | Hit feedback (spec section 9). The Player alternates full opacity and
+-- 'blinkDimAlpha' every 'blinkPeriod' seconds for the whole Grace Period
+-- (full first); a full-screen red overlay starts at 'hitFlashAlpha' and
+-- decays linearly to 0 over 'hitFlashTime'. Fixed, not settings.
+blinkPeriod, blinkDimAlpha, hitFlashAlpha, hitFlashTime :: Double
+blinkPeriod = 0.1
+blinkDimAlpha = 0.25
+hitFlashAlpha = 0.3
+hitFlashTime = 0.3
+
+-- | Streak Meter animations (spec section 9), all linear: the fill grows over
+-- 'meterGrowTime' per Kill; a group-completing Kill shows the bar full and
+-- white for 'meterFlashTime', then empties it over 'meterEmptyTime', while the
+-- "+N" label scales from 'labelPopScale' to 1 over 'labelPopTime'; a Typo
+-- empties the bar and fades the label over 'typoFadeTime'.
+meterGrowTime, meterFlashTime, meterEmptyTime, labelPopTime, labelPopScale, typoFadeTime :: Double
+meterGrowTime = 0.1
+meterFlashTime = 0.15
+meterEmptyTime = 0.25
+labelPopTime = 0.2
+labelPopScale = 1.4
+typoFadeTime = 0.2
