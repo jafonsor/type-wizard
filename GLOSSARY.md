@@ -107,3 +107,11 @@ _Avoid_: Viewport
 **Plus Sign**:
 A "+" spawned at a killed Enemy for each point earned. The signs are slightly spread, overlap, and animate towards the Player.
 _Avoid_: Coin, particle
+
+**Phase**:
+Where a Round is: Idle (no Round yet), Running, or Over (the last Life is lost and the Round Summary is shown).
+_Avoid_: Mode, screen
+
+**Viewport**:
+The canvas size in CSS pixels and its aspect ratio, as the renderer reports it each frame. Not the Camera.
+_Avoid_: Using it for the Camera

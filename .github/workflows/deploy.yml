@@ -1,0 +1,77 @@
+# Build the game on every push to main and publish it to GitHub Pages
+# (https://<owner>.github.io/<repo>/). The base path is the repository name,
+# taken from the workflow context, so a renamed or forked repository still
+# deploys under its own sub-path.
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write # the Nix store cache purges its own old entries
+
+concurrency:
+  group: deploy
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      # The runner starts with ~14 GB free; the Nix store needs more.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          df -h /
+
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            accept-flake-config = true
+            fallback = true
+            keep-outputs = true
+            keep-derivations = true
+
+      # Keep the Nix store between runs as one cache entry.
+      - name: Nix store cache
+        uses: nix-community/cache-nix-action@v7
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('**/*.nix', '**/*.cabal', 'cabal.project') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+          gc-max-store-size-linux: 10G
+          purge: true
+          purge-prefixes: nix-${{ runner.os }}-
+          purge-created: 0
+          purge-last-accessed: P7D
+          purge-primary-key: never
+
+      - name: Build
+        run: nix build -L
+
+      - name: Export the site
+        run: tools/export-site.sh result site "/${GITHUB_REPOSITORY#*/}/"
+
+      - name: Check the site size
+        run: |
+          du -sh site
+          if [ -n "$(find site -type f -size +95M)" ]; then
+            echo "a file in the site is near GitHub Pages' 100 MB limit" >&2
+            exit 1
+          fi
+
+      - name: Publish to gh-pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: site
+          publish_branch: gh-pages
+          force_orphan: true

@@ -6,11 +6,38 @@
 
 **Blocked by:** 16
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Key capture ignores auto-repeat and non-letter keys, prevents the default for Tab in JS, and only listens while the Game page canvas is attached
-- [ ] Every transition in the spec's typing table behaves as written, including Closest Enemy wins and tie to the earlier spawn
-- [ ] Typed letters, the Lock-expected letter and default letters use the visual spec's colours
-- [ ] Tab resets the Word with no cost to Streak or Accuracy; Tab with no Focus does nothing
-- [ ] A Kill removes the Enemy; correct and wrong Keystrokes are counted for Accuracy and WPM
-- [ ] Tests cover each transition, wrong keys while Locked, and the Accuracy definition
+- [x] Key capture ignores auto-repeat and non-letter keys, prevents the default for Tab in JS, and only listens while the Game page canvas is attached
+- [x] Every transition in the spec's typing table behaves as written, including Closest Enemy wins and tie to the earlier spawn
+- [x] Typed letters, the Lock-expected letter and default letters use the visual spec's colours
+- [x] Tab resets the Word with no cost to Streak or Accuracy; Tab with no Focus does nothing
+- [x] A Kill removes the Enemy; correct and wrong Keystrokes are counted for Accuracy and WPM
+- [x] Tests cover each transition, wrong keys while Locked, and the Accuracy definition
+
+## Answer
+
+Built and checked on 2026-11-24. Criterion -> mechanism:
+
+1. **Key capture: ignores auto-repeat and non-letters, Tab default prevented in JS, listens only while the canvas is attached.** `static/src/js/keys.js`. Browser (headless Chrome, real `Input.dispatchKeyEvent` events, `check17.mjs` against the built page): a held key (one key-down plus 4 `autoRepeat` key-downs) sent exactly one Keystroke (`TypeWizardKeys.stats.sent` delta 1) and the state shows k = 1 with no Typo (a counted repeat would have been a wrong letter); Ctrl, Meta and Alt chords of the expected letter sent nothing and changed nothing; Shift+letter (capital) is typed as the lowercase letter. Tab on the Game page leaves `document.activeElement` on `BODY` (the Menu button would take it if the default were not prevented); on the Start page and the Settings page the same Tab moves focus to a `BUTTON` and an `INPUT` (default kept); letters on the Start page and the Settings page send nothing and the state hook stays `null`. The shim attaches once per Game page visit (`attached` 1, `active` 1), detaches with the canvas after Menu (`active` 0), and Tab navigation works again on Start afterwards; Play again attaches a second time. Non-letter keys are dropped in the shim and again in `step` (`Key c` outside a-z is ignored, tested).
+2. **Every row of the typing table, including Closest Enemy wins and the tie to the earlier spawn.** Pure tests, `common/test/TypingTests.hs` (`common-test`: 165 cases, 0 failures): Idle + first letter Focuses with k = 1 and a correct Keystroke; Idle + no match changes nothing (the whole state is equal); closest wins (by Euclidean distance, `(3,4)` beats `(0,6)`); a tie goes to the lower id whatever the list order; parked Enemies (equal up to rounding) tie too; Focused + next letter k + 1; Focused + wrong letter is a Typo (Locked at the same k, wrong + 1, one Typo); Locked + expected letter is Focused at k + 1 (a Kill if it completes the Word); Locked + other letter is a wrong Keystroke, not a Typo, still Locked; Tab from Focused or Locked clears Focus; Tab in Idle is a no-op (state equal); the Enemy keeps moving after Tab; keys and Tab ignored in Phase Idle and Over; Start resets Focus and counters. Browser: with Enemies sharing a first letter, the nearer one (14.67 against 17.67 units) was Focused, and two Enemies parked at 1.10 tied to the earlier spawn.
+3. **Letter colours.** `buildScene` tests in `SceneTests.hs` (query helper on the Word's `Text` node): the first k letters of the Focused Word `#6fe08a`, the Locked expected letter `#ff5c5c`, the rest and all other Enemies' letters `#e6e6e6`, all from the settings fields (changed settings change them), and after Tab everything is default. Browser pixels (800x600): after the first letter, green pixels with their mean x inside letter 1's cell and no red; after a Typo, red pixels with mean x inside letter 2's cell and green still in letter 1; after the unlock, no red and green over two letters; after Tab, no green and no red. Screenshot read by eye (`game17-2-locked.png`): the Word "wuh" with `w` green, `u` red, `h` light grey.
+4. **Tab resets the Word with no cost to Streak or Accuracy; Tab with no Focus does nothing.** Tests: counters (`correctKeys`, `wrongKeys`, `typos`) equal before and after Tab, Accuracy equal; Tab in Idle leaves the state equal. Browser: counters unchanged across Tab and the pixels are default. Streak does not exist yet (ticket 18): there is nothing to cost, and ticket 18 must keep Tab out of the Streak.
+5. **A Kill removes the Enemy; correct and wrong Keystrokes are counted for Accuracy and WPM.** Tests: Kill removes exactly that Enemy and leaves the others' ids, state Idle, `kills` + 1, a Kill after a Typo counts the wrong key; `accuracy` = correct / (correct + wrong) in percent (3 correct and 1 wrong is 75, 1 and 3 is 25), 100 with none, unaffected by no-match keys and Tab; `wpm` = (correct chars / 5) / minutes from the first Keystroke (2 chars over 6 s is 4, 3 over 6 s is 6; the clock starts at the first Keystroke, a wrong first key starts it too; 0 before time passes); `roundTime` sums clamped steps. Browser: the Kill removed the Enemy from the state and the square and Word from the pixels; `kills` 1, correct 5, wrong 3, Accuracy 62.5, `wpm` > 0.
+6. **Tests cover each transition, wrong keys while Locked and the Accuracy definition.** As in 2 and 5; determinism for a fixed seed is a test (same inputs, same state).
+
+Mutation: made a wrong letter while Locked call `onTypo` (a new Typo); `common-test` went red with 2 failures ("another letter while Locked is a wrong Keystroke, not a new Typo": expected (1,3,1), got (1,3,3); and the repeated-wrong-letter case). Restored. Then replaced the closest-Enemy rule by "lowest id wins"; 4 failures (closest wins, tie, parked tie, parked can be Focused). Restored; green again.
+
+Gates (AGENTS.md names none; the README's): `nix build .#haskell-nix --cores 4 -L` ok with no `warning: [GHC` lines (wasm and native); `nix build .#checks.aarch64-darwin.common-test .#checks.aarch64-darwin.renderer-test --cores 4 --rebuild` green; `check17.mjs` against `tools/export-site.sh` output (the only console entry was a `favicon.ico` 404). While building I fixed one `-Wname-shadowing` warning in `pullScene` (`aspect`), left by ticket 16.
+
+Decisions not in the spec:
+
+- **Focus shape.** `Focus = NoFocus | Focused enemyId k | Locked enemyId k` in `GameState.focus`, exported with `focusInfo` (positional constructors: record fields would be partial). Colouring and the hook read it. The Word's "k" lives only here, so Tab and Kill reset it by dropping the Focus.
+- **Counters.** `correctKeys`, `wrongKeys`, `typos`, `kills`, `roundTime`, `firstKeyAt`. Correct characters for WPM are the correct Keystrokes (one per typed letter), exposed as `correctChars`. `accuracy` is a percentage, 0 to 100 (100 with no Keystrokes). WPM uses `roundTime` (the sum of clamped dt), not wall time, so a hidden tab never counts; `wpm` ends "now" (the last Tick) until ticket 19 freezes it at Round end.
+- **Hooks for ticket 18.** `onTypo` (Streak, Bonus and meter clear here) and `onKill` (Streak, Points here) are named functions in `Game.State`. A `typos` counter stands in so the Typo is assertable now.
+- **Distance ties.** Distances are compared rounded to a millionth: parked Enemies sit at 1.1 only up to rounding, and exact comparison would let rounding noise beat "earlier spawn". The pure test `Enemies parked at contact ... tie` and the browser run (two Enemies at 1.10) cover it.
+- **Keys not typed.** A no-match letter in Idle still reaches `step` (the shim cannot know) and is ignored there. `Tab` is handled only while Running.
+- **Modifiers.** Ctrl/Meta/Alt chords are ignored and not prevented (spec section 15 lists shortcuts as a polish item; ignoring them here is safe and keeps shortcuts working). Shift is allowed. Ctrl+Tab and the like are left to the browser. Escape/Menu: ticket 19.
+- **Wiring.** The shim calls a jsaddle `function` callback (async), which fires the trigger event; Tab's `preventDefault` happens in JS before that, so it does not depend on the callback. `keys.js` is a new head script beside `renderer.js`; the detach is checked per key and per frame (the shim polls `isConnected` like the renderer's loop). The test seam is `TypeWizardKeys.stats`.
+- **Hook JSON** gained `focus` (`{enemy, k}` or null), `locked`, `correct`, `wrong`, `typos`, `kills`, `accuracy`, `wpm`.
+- No contradiction with the spec found. One note: the Streak/Bonus/meter part of the Typo row and "no cost to Streak" for Tab are untestable until ticket 18; Hit, Lives and Round end are untouched (Enemies park harmlessly), and no Shot animation exists (a Kill just removes the Enemy).
