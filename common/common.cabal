@@ -182,6 +182,8 @@ library
     -- Modules exported by the library.
     exposed-modules:  Common
                       Common.Route
+                      Game.Save
+                      Game.Settings
 
     -- Modules included in this library but not exported.
     -- other-modules:
@@ -191,9 +193,24 @@ library
 
     -- Other library packages from which modules are imported.
     build-depends:    base
+                    , aeson
+                    , bytestring
                     , obelisk-route
+                    , scientific
                     , text
 
     -- Directories containing source files.
     hs-source-dirs:   src
 
+
+test-suite common-test
+    import:           common
+    type:             exitcode-stdio-1.0
+    main-is:          Main.hs
+    hs-source-dirs:   test
+    build-depends:    base
+                    , aeson
+                    , bytestring
+                    , common
+                    , HUnit
+                    , text

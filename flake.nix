@@ -26,6 +26,13 @@
           nixpkgs = project.nixpkgs.serverExe.js;
         });
 
+      # The pure tests: `nix build .#checks.<system>.common-test`.
+      checks = eachSystem (system:
+        let project = import ./default.nix { inherit system inputs; };
+        in {
+          common-test = project.haskell-nix.hsPkgs.common.checks.common-test;
+        });
+
       devShells = eachSystem (system:
         let shells = import ./shell.nix { inherit system inputs; };
         in {

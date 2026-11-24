@@ -185,6 +185,7 @@ library
     -- Modules exported by the library.
     exposed-modules:  Frontend
                       Frontend.Page
+                      Frontend.Storage
                       Frontend.Words
 
     -- Modules included in this library but not exported.
@@ -199,7 +200,9 @@ library
                     , common
                       --
                     , bytestring
+                    , containers
                     , file-embed
+                    , jsaddle
                     , obelisk-frontend
                     , obelisk-generated-static
                     , obelisk-route

@@ -4,8 +4,8 @@ A top-down typing game in Haskell compiled to wasm (reflex-dom, Obelisk v2). The
 
 ## Layout
 
-- `common`: shared code (`Common.Route`).
-- `frontend`: the browser app (`Frontend`, `Frontend.Page`, `Frontend.Words`). `frontend/wasm` and `frontend/js` are Obelisk wrapper packages that cross-compile it.
+- `common`: shared code (`Common.Route`) and the pure game modules (`Game.Settings`, `Game.Save`), with a test-suite.
+- `frontend`: the browser app (`Frontend`, `Frontend.Page`, `Frontend.Storage`, `Frontend.Words`). `frontend/wasm` and `frontend/js` are Obelisk wrapper packages that cross-compile it.
 - `backend`: a stub that serves the page and its files. No game logic.
 - `static/src`: static files (CSS) served as is. `static/generated` is Obelisk's generated package; cabal rewrites `static/generated/src/Obelisk/Generated/Static.hs`, so revert it, never commit changes to it.
 - `config`: Obelisk config.
@@ -34,6 +34,20 @@ cd result && ./backend                   # serves http://localhost:8000
 Use `--cores 4`: all cores can run the machine out of memory.
 
 In the dev shell, `ob-run` (or `cabal build`) works for quick native iteration; the wasm build is the one that counts.
+
+## Tests
+
+The pure tests (`common/test`, HUnit) run as a flake check:
+
+```
+nix build .#checks.aarch64-darwin.common-test --cores 4 -L    # use your own system in place of aarch64-darwin
+```
+
+It prints `Cases: N  Tried: N  Errors: 0  Failures: 0`. New test files need `git add -N` first, like any file. Browser behaviour (the Reflex wiring, the JS seam) has no automated test; it is checked by driving the built page in headless Chrome.
+
+## Settings and saved progress
+
+`Game.Settings` is the `Settings` record plus a field table (default, min, max, group); the Settings page, the JSON codec, the clamp and the group resets all run from that table. The stored form is flat JSON under `localStorage` key `typewizard.settings` with `version: 1`. Saved progress (`Game.Save`: Total Points, Streak, Bonus) is `typewizard.save`, separate. `Frontend.Page` holds `Dynamic Settings` and `Dynamic Save` above the page switch, loads them once in the browser and writes them back on every change. `static/src/js/storage.js` wraps every `localStorage` access in try/catch; with storage blocked the game uses defaults and in-memory state. To add a setting: add the record field, its default, and one line in `fields`; no other code changes.
 
 ## Pages
 
