@@ -103,3 +103,18 @@ Harness note: CDP's synthesised Alt+Tab / Cmd+Tab move DOM focus to the Menu but
 ### Gates
 
 AGENTS.md names none. `nix build .#haskell-nix --cores 4 -L` and `--rebuild`, and `nix build .#checks.aarch64-darwin.common-test .#checks.aarch64-darwin.renderer-test --cores 4 --rebuild -L --no-link`: `nix build .#haskell-nix --cores 4 -L` ok, then again with `--rebuild` ok: 0 `warning: [GHC` in both logs (this ticket changed no Haskell source, only `keys.js`, so GHC did not recompile; the last full compile was ticket 22's, also clean); `common-test` 355 cases and `renderer-test` 36 cases, 0 errors, 0 failures, with `--rebuild`. Browser scripts: three full runs, 92 PASS and 0 FAIL each.
+
+## Code review since the initial commit (cleanup)
+
+Applied: GLOSSARY gained Phase (Idle, Running, Over) and Viewport.
+
+Declined, with reasons:
+- `Start` resets `windowFocused`: intended (test "Start clears a pause"); Blur is ignored outside a Running Round and Play again needs a click or key, so the window has focus. Not a bug.
+- Splitting `Game.State` (987 lines), a `Scoring` record, clock newtypes, folding the `Layout` literals: large refactors across 355 tests with no behaviour change; not worth the risk at the end of the run.
+- Renaming `correctKeys`/`wrongKeys`/`runKills`, the Viewport type, `RoundResult`: judgement calls, left as is.
+- Carried-in Bonus ignored: Bonus is a pure function of Streak and the Round's group size, so it is re-derived (State.hs header says so). Differs from the save only if the group size setting changed.
+- Enter not reported when a button has focus: intentional (keys.js header), Escape still works.
+- `?hook`, `?bench`, `Words: N` on the Start page, `#0e1117` canvas CSS, the hint colour: dev or small additions beyond the spec; kept, flagged as product questions.
+- Shot colour interpolates sRGB bytes, not linear light: open product question.
+- `tools/make-words.sh` does not exist (placeholder word list): open product question, no ticket.
+- Settings stored once again right after load: harmless.
