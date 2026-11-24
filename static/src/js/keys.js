@@ -12,6 +12,11 @@
 //   - Tab: `preventDefault` here (never in Haskell, which would be too late),
 //     so focus cannot leave the page; reported as "Tab". Tab with Shift is
 //     still a Tab. Tab with ctrl/meta/alt is left to the browser (tab switch).
+//   - `/` and `'` (no ctrl/meta/alt): `preventDefault`, because Firefox opens
+//     its quick-find bar on them and the bar would then take the letters
+//     that follow. Still reported as "Other". With a modifier they are left
+//     to the browser. (Chrome has no such shortcut; checked there only for
+//     the event being cancelled.)
 //   - a to z (`event.key`, either case): reported lowercase. Not reported
 //     with ctrl, meta or alt held (shortcuts such as Ctrl+C are not
 //     Keystrokes and keep working); Shift is fine (Caps Lock and Shift give
@@ -73,6 +78,7 @@
         callback("Tab");
         return;
       }
+      if (e.key === "/" || e.key === "'") e.preventDefault();
       if (e.repeat) return;
       if (typeof e.key === "string" && e.key.length === 1 && /^[a-zA-Z]$/.test(e.key)) {
         stats.sent++;
