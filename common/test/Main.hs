@@ -13,6 +13,7 @@ import Test.HUnit
 import Game.Save qualified as Save
 import Game.Settings
 import AnimationTests (animationTests)
+import CameraTests (cameraTests)
 import HitTests (hitTests)
 import SceneTests (sceneTests)
 import ScoringTests (scoringTests)
@@ -22,7 +23,7 @@ import WordsTests (wordsTests)
 
 main :: IO ()
 main = do
-  result <- runTestTT (TestList [settingsTests, saveTests, wordsTests, stateTests, typingTests, scoringTests, hitTests, sceneTests, animationTests])
+  result <- runTestTT (TestList [settingsTests, saveTests, wordsTests, stateTests, typingTests, scoringTests, hitTests, sceneTests, animationTests, cameraTests])
   unless (errors result == 0 && failures result == 0) (ioError (userError "tests failed"))
 
 field :: Text -> Field

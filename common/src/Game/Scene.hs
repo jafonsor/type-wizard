@@ -1,8 +1,11 @@
 -- | The pure scene builder (spec section 6): a 'GameState' and the 'Frame'
 -- become the renderer's 'Scene'. Called once per frame by the render pull.
 --
--- The Camera stays on the Player (the pan comes later), at the world height
--- of the Round's settings. The world is, in draw order: the background, the
+-- The Camera centre is the Camera record ('GameState.camera') evaluated at
+-- @Frame.time@ (spec section 9, "Game.State"), at the world height of the
+-- Round's settings. The dot grid is anchored to the world: the renderer takes
+-- its extent and offset from the Camera centre, so it scrolls with a pan. The
+-- background square follows the Camera; the HUD overlay does not. The world is, in draw order: the background, the
 -- dot grid, the Player, then each Enemy (a square in its Tier colour) followed
 -- by its Word.
 --
@@ -35,13 +38,13 @@ import Game.Layout
 import Game.Settings (Settings (..))
 import Game.State
   ( Enemy (..), Focus (..), GameState (..), KillAnim (..), PlusSign (..), Vec2 (..)
-  , meterFill, shotArrival, signEnd, signFlyStart, streakBonus )
+  , cameraCentreAt, meterFill, shotArrival, signEnd, signFlyStart, streakBonus )
 
 buildScene :: Settings -> Frame -> GameState -> Scene
 buildScene cfg frame st = Scene
-  { sceneCamera = Camera (v2 st.playerPos) worldH
+  { sceneCamera = Camera centre worldH
   , sceneWorld =
-      [ Square (at (v2 st.playerPos) (worldH * frame.viewport.aspect + 4) (worldH + 4)) (hexColour cfg.backgroundColour)
+      [ Square (at centre (worldH * frame.viewport.aspect + 4) (worldH + 4)) (hexColour cfg.backgroundColour)
       , DotGrid (realToFrac dotSpacing) (realToFrac dotRadius) (hexColour cfg.dotGridColour)
       , Square (at (v2 st.playerPos) (realToFrac playerSize) (realToFrac playerSize)) (hexColour cfg.playerColour)
       , meterNodes cfg st
@@ -51,6 +54,7 @@ buildScene cfg frame st = Scene
   }
   where
     worldH = realToFrac cfg.worldHeight
+    centre = v2 (cameraCentreAt frame.time st.camera)
 
 -- | The animations of one Kill at time @t@ (the frame time; the builder's
 -- clock is the records' clock, see "Game.State"), in draw order: the dying

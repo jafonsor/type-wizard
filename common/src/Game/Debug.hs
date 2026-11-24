@@ -56,6 +56,10 @@ stateSummary st = object
           [ "start" .= k.kaStart, "from" .= vec k.kaFrom, "to" .= vec k.kaTo, "streak" .= k.kaStreak
           , "points" .= k.kaPoints, "signs" .= length k.kaSigns, "end" .= killAnimEnd k ]
       | k <- st.killAnims ]
+  , "camera" .= object
+      [ "start" .= st.camera.caStart, "from" .= vec st.camera.caFrom
+      , "target" .= vec st.camera.caTarget, "tau" .= st.camera.caTau
+      , "centre" .= vec (cameraNow st) ]
   , "roundResult" .= fmap resultSummary st.roundResult
   , "enemies" .=
       [ object

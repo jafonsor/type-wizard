@@ -76,6 +76,26 @@
 -- survive 'endRound' and finish behind the Summary; only 'Start' (a new
 -- Round) clears them.
 --
+-- /Camera./ The Camera is a start-time record too ('CameraAnim': start time,
+-- start centre, target, time constant), in the same time base as the Kill
+-- records (the raw rAF timestamp, 'lastTime'). The builder evaluates
+-- @centre(t) = target + (start - target) * exp (-(t - t0) / tau)@ at its
+-- @Frame.time@, so the Camera is never mutated per Tick. 'step' creates a new
+-- record only when the /target/ changes, which happens only when the Focused
+-- Enemy changes (Focus starts, a Kill, a Tab, Round end) and starts the new
+-- record from the Camera's centre evaluated at 'lastTime', so a retarget in
+-- the middle of a pan is continuous with the last frame drawn. The target of
+-- a Focus is computed once, at the moment of Focus, from the Enemy's position
+-- then ('cameraTarget'), and /held/ while the Word is typed (the Enemy
+-- keeps moving toward the Player, which is inside the view, so it stays
+-- visible: the segment from a visible point to the Player is inside the
+-- rectangle). A Kill, a Tab or Round end ('Over' drops Focus) retarget to the
+-- Player and the Camera eases back, behind the Summary too (Ticks in 'Over'
+-- still arrive at the builder's clock). Like a Kill record, a retarget
+-- starts up to one frame early (the key event is between two frames). 'Start'
+-- resets the Camera to rest on the Player. The spawn ring does not read the
+-- Camera.
+--
 -- /Order inside a Tick./ Existing Enemies move first, then due Enemies spawn
 -- at the ring, so an Enemy is on the ring exactly in the Tick it appears.
 module Game.State
@@ -110,6 +130,12 @@ module Game.State
   , signEnd
   , activeShots
   , activePlusSigns
+    -- * Camera
+  , CameraAnim (..)
+  , cameraTarget
+  , cameraCentreAt
+  , cameraNow
+  , restingCamera
     -- * Scoring
   , streakBonus
   , meterFill
@@ -216,6 +242,7 @@ data GameState = GameState
   , windowFocused :: Bool -- ^ the window has focus (after a 'Blur', until 'Focus')
   , roundResult :: Maybe RoundResult -- ^ set when the Round ends ('Over')
   , killAnims :: [KillAnim] -- ^ the Shots and Plus Signs in flight, oldest first
+  , camera :: CameraAnim -- ^ the Camera's current easing record
   , animRng :: Rng
     -- ^ the generator for the Plus Signs' random parameters, derived from the
     -- Round's seed; separate from 'rng' so animations never change the Words
@@ -337,11 +364,17 @@ initialState = GameState
   , windowFocused = True
   , roundResult = Nothing
   , killAnims = []
+  , camera = restingCamera defaultSettings.cameraTimeConstant (Vec2 0 0)
   , animRng = Rng (mkSMGen 0)
   }
 
+-- | One input. The rules are 'stepRules'; afterwards the Camera is retargeted
+-- if the Focused Enemy changed (see /Camera/ above).
 step :: Settings -> Words -> Input -> GameState -> GameState
-step settings ws input st = case input of
+step settings ws input st = retarget st (stepRules settings ws input st)
+
+stepRules :: Settings -> Words -> Input -> GameState -> GameState
+stepRules settings ws input st = case input of
   Start seed carried -> startRound settings seed carried st
   Tick now | st.phase == Running, st.paused -> expire now st { lastTime = Just now }
   Tick now | st.phase == Running -> expire now (tick ws now st)
@@ -369,7 +402,83 @@ startRound settings seed carried st = initialState
   , rng = Rng (mkSMGen seed)
   , animRng = Rng (mkSMGen (seed `xor` 0x9e3779b97f4a7c15))
   , viewAspect = st.viewAspect
+  , camera = restingCamera settings.cameraTimeConstant (Vec2 0 0)
   }
+
+-- Camera ----------------------------------------------------------------------
+
+-- | The Camera's easing record: from 'caFrom' at 'caStart' (the Tick clock)
+-- toward 'caTarget' with time constant 'caTau' (a snapshot of the Round's setting).
+data CameraAnim = CameraAnim
+  { caStart :: Double
+  , caFrom :: Vec2
+  , caTarget :: Vec2
+  , caTau :: Double
+  }
+  deriving stock (Eq, Show)
+
+-- | A Camera at rest on a point.
+restingCamera :: Double -> Vec2 -> CameraAnim
+restingCamera tau p = CameraAnim { caStart = 0, caFrom = p, caTarget = p, caTau = tau }
+
+-- | The Camera centre at time t: exponential smoothing,
+-- @target + (from - target) * exp (-(t - start) / tau)@; before the start it is
+-- the start centre, and with a time constant of 0 or less it is the target.
+cameraCentreAt :: Double -> CameraAnim -> Vec2
+cameraCentreAt t c
+  | c.caTau <= 0 = c.caTarget
+  | otherwise = Vec2 (mix c.caFrom.vx c.caTarget.vx) (mix c.caFrom.vy c.caTarget.vy)
+  where
+    k = exp (negate (max 0 (t - c.caStart)) / c.caTau)
+    mix a b = b + (a - b) * k
+
+-- | The Camera centre as of the last Tick ('Nothing' time reads as 0): where the
+-- last frame drawn had it.
+cameraNow :: GameState -> Vec2
+cameraNow st = cameraCentreAt (fromMaybe 0 st.lastTime) st.camera
+
+-- | Where the Camera should rest for an Enemy at a position (spec section 9).
+-- The default view is the Camera centred on the Player: half-height
+-- @worldHeight / 2@, half-width that times the aspect. An Enemy inside it
+-- leaves the target on the Player. Outside it, each axis is shifted by the
+-- smallest amount that puts the Enemy inside the visible rectangle inset by
+-- @cameraInset@ (an axis already inside the inset is not shifted), then the
+-- shift is clamped per axis so the Player stays at least @playerMargin@ from
+-- every edge (the margin wins over the inset when they conflict; the Enemy
+-- may then stay outside its inset, or even off the screen for a very far one).
+cameraTarget :: Settings -> Double -> Vec2 -> Vec2 -> Vec2
+cameraTarget cfg aspect player p
+  | abs dx <= hw && abs dy <= hh = player
+  | otherwise = Vec2 (player.vx + axis hw dx) (player.vy + axis hh dy)
+  where
+    hh = cfg.worldHeight / 2
+    hw = hh * aspect
+    dx = p.vx - player.vx
+    dy = p.vy - player.vy
+    axis half d = max (negate lim) (min lim (signum d * max 0 (abs d - max 0 (half - cfg.cameraInset))))
+      where lim = max 0 (half - cfg.playerMargin)
+
+-- | After an input: when the Focused Enemy (its id, not the typed count)
+-- differs from the one before, point the Camera at the new target, starting
+-- from where it is now. No change of Focus, no new record.
+retarget :: GameState -> GameState -> GameState
+retarget old new
+  | focusId old /= focusId new && target /= new.camera.caTarget = new { camera = anim }
+  | otherwise = new
+  where
+    focusId = fmap fst . focusInfo . (.focus)
+    cfg = new.roundSettings
+    target = case focusedEnemy new of
+      Just e -> cameraTarget cfg new.viewAspect new.playerPos e.enemyPos
+      Nothing -> new.playerPos
+    -- a Start has just reset the record, so evaluating the old one is moot there
+    t0 = fromMaybe 0 new.lastTime
+    anim = CameraAnim
+      { caStart = t0
+      , caFrom = cameraCentreAt t0 new.camera
+      , caTarget = target
+      , caTau = cfg.cameraTimeConstant
+      }
 
 -- | Drops the records that are over at this Tick's timestamp.
 expire :: Double -> GameState -> GameState
